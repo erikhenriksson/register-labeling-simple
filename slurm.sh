@@ -31,5 +31,9 @@ fi
 # Create logs directory if it doesn't exist
 mkdir -p slurm-logs
 
+# Create and set custom cache directory in scratch
+export HF_HOME="/scratch/project_2011770/hf_cache"
+mkdir -p $HF_HOME
+
 # Run the Python script using srun
 srun python run.py "$INPUT_FILE" "$OUTPUT_FILE"

@@ -1,9 +1,13 @@
+import io
+import json
+import os
+import sys
+
 import transformers
 import zstandard as zstd
-import json
-import io
-import sys
 from tqdm import tqdm
+
+os.environ["HF_HOME"] = ".hf/hf_home"
 
 # Set up register identification pipeline
 pipeline = transformers.pipeline(

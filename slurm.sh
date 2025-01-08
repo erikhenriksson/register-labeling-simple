@@ -10,6 +10,12 @@
 #SBATCH --account=project_2011770
 #SBATCH --partition=gpusmall
 
+# If run without sbatch, invoke here
+if [ -z $SLURM_JOB_ID ]; then
+    sbatch "$0" "$@"
+    exit
+fi
+
 module use /appl/local/csc/modulefiles
 module load pytorch/2.4
 

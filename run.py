@@ -8,6 +8,7 @@ import zstandard as zstd
 from tqdm import tqdm
 
 os.environ["HF_HOME"] = ".hf/hf_home"
+os.environ["XDG_CACHE_HOME"] = ".hf/xdg_cache_home"
 
 # Set up register identification pipeline
 pipeline = transformers.pipeline(

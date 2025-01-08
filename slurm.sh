@@ -13,14 +13,17 @@
 module use /appl/local/csc/modulefiles
 module load pytorch/2.4
 
-if [ "$#" -ne 1 ]; then
-    echo "Usage: $0 PACKAGE" >&2
-    echo >&2
-    echo "example: $0 fin_Latn.shuf.zst" >&2
+INPUT_FILE="$1"
+OUTPUT_FILE="$2"
+
+# Check if input and output files are provided
+if [ -z "$INPUT_FILE" ] || [ -z "$OUTPUT_FILE" ]; then
+    echo "Usage: sbatch script.sh input.jsonl.zst output.jsonl"
     exit 1
 fi
 
-PACKAGE="$1"
+# Create logs directory if it doesn't exist
+mkdir -p slurm-logs
 
-module use /appl/local/csc/modulefiles
-module load pytorch/2.4
+# Run the Python script using srun
+srun python run.py "$INPUT_FILE" "$OUTPUT_FILE"

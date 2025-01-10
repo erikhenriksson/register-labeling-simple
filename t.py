@@ -1,6 +1,7 @@
 import json
 from collections import Counter
 from typing import Dict, List, Set
+import argparse
 
 
 def setup_label_structure() -> tuple:
@@ -73,6 +74,8 @@ def process_jsonl_file(file_path: str) -> tuple:
     # Process file
     label_counter = Counter()
     total_records = 0
+    hybrid_count = 0
+    nonhybrid_count = 0  # includes both single-label and none
 
     with open(file_path, "r") as f:
         for line in f:
@@ -83,14 +86,15 @@ def process_jsonl_file(file_path: str) -> tuple:
             # Get labels for this record
             record_labels = process_probabilities(probs, labels_list, child_to_parent)
 
-            # If it's a hybrid, count it as a hybrid only
+            # Count hybrids vs non-hybrids
             if len(record_labels) > 1:
+                hybrid_count += 1
                 label_counter["+".join(sorted(record_labels))] += 1
-            # If single label, count it individually
             elif len(record_labels) == 1:
+                nonhybrid_count += 1
                 label_counter[next(iter(record_labels))] += 1
-            # If no labels pass threshold, count as "none"
             else:
+                nonhybrid_count += 1
                 label_counter["none"] += 1
 
     # Calculate percentages
@@ -98,16 +102,35 @@ def process_jsonl_file(file_path: str) -> tuple:
         label: (count / total_records) * 100 for label, count in label_counter.items()
     }
 
-    return dict(label_counter), label_percentages, total_records
+    return (
+        dict(label_counter),
+        label_percentages,
+        total_records,
+        hybrid_count,
+        nonhybrid_count,
+    )
 
 
 if __name__ == "__main__":
-    # Example usage
-    file_path = "fin_output.jsonl"
-    frequencies, percentages, total = process_jsonl_file(file_path)
+    # Setup command line argument parsing
+    parser = argparse.ArgumentParser(
+        description="Process JSONL file for label analysis."
+    )
+    parser.add_argument("file_path", help="Path to the JSONL file")
+    args = parser.parse_args()
 
+    # Process the file
+    frequencies, percentages, total, hybrid_count, nonhybrid_count = process_jsonl_file(
+        args.file_path
+    )
+
+    # Print summary statistics
     print(f"\nProcessed {total} records")
-    print("\nLabel Frequencies (sorted by frequency):")
+    print(f"Hybrid combinations: {hybrid_count} ({(hybrid_count/total)*100:.2f}%)")
+    print(f"Non-hybrid cases: {nonhybrid_count} ({(nonhybrid_count/total)*100:.2f}%)")
+
+    print("\nDetailed Label Frequencies (sorted by frequency):")
+    print("-" * 50)
     # Sort by frequency (count) in descending order
     sorted_items = sorted(frequencies.items(), key=lambda x: (-x[1], x[0]))
     for label, count in sorted_items:

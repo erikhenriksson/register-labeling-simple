@@ -10,11 +10,12 @@ from tqdm import tqdm
 os.environ["HF_HOME"] = ".hf/hf_home"
 os.environ["XDG_CACHE_HOME"] = ".hf/xdg_cache_home"
 
-# Set up register identification pipeline
+# Set up pipeline with local model
+model_path = "/scratch/project_2011770/bge-2048"
 pipeline = transformers.pipeline(
     task="text-classification",
-    model="TurkuNLP/multilingual-web-register-classification",
-    tokenizer="xlm-roberta-large",
+    model=model_path,
+    tokenizer=model_path,  # It will use the same path for tokenizer
     top_k=None,
     function_to_apply="sigmoid",
     batch_size=64,
@@ -39,6 +40,7 @@ def read_zst_jsonl(filepath):
 def process_file(input_file, output_file):
     texts = []
     items = []
+    total_processed = 0
 
     with open(output_file, "w", encoding="utf-8") as out_f:
         for item in tqdm(read_zst_jsonl(input_file)):
@@ -53,6 +55,8 @@ def process_file(input_file, output_file):
                         round(float(p["score"]), 4) for p in preds
                     ]
                     out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
+                total_processed += len(texts)
+                print(f"Processed batch. Total items processed: {total_processed}")
                 texts = []
                 items = []
 
@@ -64,6 +68,8 @@ def process_file(input_file, output_file):
                     round(float(p["score"]), 4) for p in preds
                 ]
                 out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
+            total_processed += len(texts)
+            print(f"Processed final batch. Total items processed: {total_processed}")
 
 
 if __name__ == "__main__":

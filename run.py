@@ -6,35 +6,29 @@ import sys
 import transformers
 import zstandard as zstd
 from tqdm import tqdm
-import torch
 
 os.environ["HF_HOME"] = ".hf/hf_home"
 os.environ["XDG_CACHE_HOME"] = ".hf/xdg_cache_home"
 
 # Set up pipeline with local model and HF tokenizer
 model_path = "/scratch/project_2011770/bge-2048"
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Load and modify config
-config = transformers.AutoConfig.from_pretrained(model_path)
-config.problem_type = "multi_label_classification"
-print(f"Number of labels in model: {config.num_labels}")
-
-# Load model with modified config
-model = transformers.AutoModelForSequenceClassification.from_pretrained(
-    model_path, config=config
-)
-
 pipeline = transformers.pipeline(
     task="text-classification",
-    model=model,
+    model=model_path,
     tokenizer="xlm-roberta-large",
+    top_k=None,
     function_to_apply="sigmoid",
     batch_size=64,
-    max_length=512,
+    max_length=2048,
     truncation=True,
-    device=device,
 )
+
+from transformers import AutoModelForSequenceClassification
+
+model = AutoModelForSequenceClassification.from_pretrained(model_path)
+print(model.config.id2label)
+
+exit()
 
 
 def read_zst_jsonl(filepath):
@@ -63,28 +57,11 @@ def process_file(input_file, output_file):
             # Process when we have enough items to fill a batch
             if len(texts) >= pipeline._batch_size:
                 results = pipeline(texts)
-                if total_processed == 0:  # Debug first batch
-                    print("First result format:", results[0])
-
-                for item, result in zip(items, results):
-                    # For multilabel, we should get logits/probabilities directly
-                    try:
-                        if isinstance(result, list):
-                            # If we get a list of label/score dicts
-                            probs = [pred["score"] for pred in result]
-                        else:
-                            # If we get raw probabilities
-                            probs = result
-                        item["register_probabilities"] = [
-                            round(float(p), 4) for p in probs
-                        ]
-                    except Exception as e:
-                        print("Error processing result:", result)
-                        print("Error:", e)
-                        raise
-
+                for item, preds in zip(items, results):
+                    item["register_probabilities"] = [
+                        round(float(p["score"]), 4) for p in preds
+                    ]
                     out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
-                out_f.flush()
                 total_processed += len(texts)
                 print(f"Processed batch. Total items processed: {total_processed}")
                 texts = []
@@ -93,14 +70,11 @@ def process_file(input_file, output_file):
         # Process remaining items
         if texts:
             results = pipeline(texts)
-            for item, result in zip(items, results):
-                if isinstance(result, list):
-                    probs = [pred["score"] for pred in result]
-                else:
-                    probs = result
-                item["register_probabilities"] = [round(float(p), 4) for p in probs]
+            for item, preds in zip(items, results):
+                item["register_probabilities"] = [
+                    round(float(p["score"]), 4) for p in preds
+                ]
                 out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
-            out_f.flush()
             total_processed += len(texts)
             print(f"Processed final batch. Total items processed: {total_processed}")
 

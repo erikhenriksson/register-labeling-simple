@@ -17,7 +17,7 @@ pipeline = transformers.pipeline(
     tokenizer="xlm-roberta-large",
     top_k=None,
     function_to_apply="sigmoid",
-    batch_size=8,
+    batch_size=64,
     max_length=512,
     truncation=True,
 )

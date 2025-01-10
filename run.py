@@ -18,7 +18,6 @@ pipeline = transformers.pipeline(
     task="text-classification",
     model=model_path,
     tokenizer="xlm-roberta-large",
-    top_k=None,
     function_to_apply="sigmoid",
     batch_size=64,
     max_length=2048,

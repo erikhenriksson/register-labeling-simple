@@ -81,9 +81,10 @@ def process_jsonl_file(file_path: str, parent_only: bool = False) -> tuple:
     total_records = 0
     hybrid_count = 0
     nonhybrid_count = 0  # includes both single-label and none
-
     with open(file_path, "r") as f:
         for line in f:
+            if total_records > 1000:
+                continue
             total_records += 1
             data = json.loads(line)
             probs = data["register_probabilities"]

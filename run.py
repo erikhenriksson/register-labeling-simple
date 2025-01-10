@@ -6,12 +6,14 @@ import sys
 import transformers
 import zstandard as zstd
 from tqdm import tqdm
+import torch
 
 os.environ["HF_HOME"] = ".hf/hf_home"
 os.environ["XDG_CACHE_HOME"] = ".hf/xdg_cache_home"
 
-# Set up pipeline with local model
+# Set up pipeline with local model and HF tokenizer
 model_path = "/scratch/project_2011770/bge-2048"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 pipeline = transformers.pipeline(
     task="text-classification",
     model=model_path,
@@ -19,8 +21,9 @@ pipeline = transformers.pipeline(
     top_k=None,
     function_to_apply="sigmoid",
     batch_size=64,
-    max_length=2048,
+    max_length=512,
     truncation=True,
+    device=device,  # Add device argument
 )
 
 

@@ -21,7 +21,7 @@ pipeline = transformers.pipeline(
     top_k=None,
     function_to_apply="sigmoid",
     batch_size=64,
-    max_length=512,
+    max_length=2048,
     truncation=True,
     device=device,  # Add device argument
 )

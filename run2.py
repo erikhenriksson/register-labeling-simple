@@ -38,7 +38,7 @@ def setup_model_and_tokenizer(model_path: str, batch_size: int = 16) -> tuple:
     return model, tokenizer, device, batch_size
 
 
-def read_zst_jsonl(filepath: str, max_lines: int = 10000) -> Dict:
+def read_zst_jsonl(filepath: str, max_lines: int = 100000) -> Dict:
     """
     Read compressed JSONL file with line limit.
     """

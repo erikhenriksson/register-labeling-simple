@@ -14,6 +14,11 @@ os.environ["XDG_CACHE_HOME"] = ".hf/xdg_cache_home"
 # Set up pipeline with local model and HF tokenizer
 model_path = "/scratch/project_2011770/bge-2048"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Load config to verify number of labels
+config = transformers.AutoConfig.from_pretrained(model_path)
+print(f"Number of labels in model: {config.num_labels}")
+
 pipeline = transformers.pipeline(
     task="text-classification",
     model=model_path,
@@ -23,6 +28,7 @@ pipeline = transformers.pipeline(
     max_length=512,
     truncation=True,
     device=device,
+    problem_type="multi_label_classification",  # Explicitly set multilabel
 )
 
 
@@ -52,15 +58,26 @@ def process_file(input_file, output_file):
             # Process when we have enough items to fill a batch
             if len(texts) >= pipeline._batch_size:
                 results = pipeline(texts)
-                # Debug print for first batch
-                if total_processed == 0:
-                    print("First result format:", results[0])  # Let's see the structure
+                if total_processed == 0:  # Debug first batch
+                    print("First result format:", results[0])
 
                 for item, result in zip(items, results):
-                    # Using the raw result which should be the probabilities
-                    item["register_probabilities"] = [
-                        round(float(prob), 4) for prob in result
-                    ]
+                    # For multilabel, we should get logits/probabilities directly
+                    try:
+                        if isinstance(result, list):
+                            # If we get a list of label/score dicts
+                            probs = [pred["score"] for pred in result]
+                        else:
+                            # If we get raw probabilities
+                            probs = result
+                        item["register_probabilities"] = [
+                            round(float(p), 4) for p in probs
+                        ]
+                    except Exception as e:
+                        print("Error processing result:", result)
+                        print("Error:", e)
+                        raise
+
                     out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
                 out_f.flush()
                 total_processed += len(texts)
@@ -72,9 +89,11 @@ def process_file(input_file, output_file):
         if texts:
             results = pipeline(texts)
             for item, result in zip(items, results):
-                item["register_probabilities"] = [
-                    round(float(prob), 4) for prob in result
-                ]
+                if isinstance(result, list):
+                    probs = [pred["score"] for pred in result]
+                else:
+                    probs = result
+                item["register_probabilities"] = [round(float(p), 4) for p in probs]
                 out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
             out_f.flush()
             total_processed += len(texts)

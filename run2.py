@@ -16,7 +16,7 @@ os.environ["HF_HOME"] = ".hf/hf_home"
 os.environ["XDG_CACHE_HOME"] = ".hf/xdg_cache_home"
 
 
-def setup_model_and_tokenizer(model_path: str, batch_size: int = 64) -> tuple:
+def setup_model_and_tokenizer(model_path: str, batch_size: int = 16) -> tuple:
     """
     Initialize the model and tokenizer.
     """

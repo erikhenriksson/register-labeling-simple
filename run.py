@@ -18,11 +18,11 @@ pipeline = transformers.pipeline(
     task="text-classification",
     model=model_path,
     tokenizer="xlm-roberta-large",
-    function_to_apply="sigmoid",
+    return_all_scores=True,  # This should give us all scores without sorting
     batch_size=64,
     max_length=2048,
     truncation=True,
-    device=device,  # Add device argument
+    device=device,
 )
 
 
@@ -52,9 +52,14 @@ def process_file(input_file, output_file):
             # Process when we have enough items to fill a batch
             if len(texts) >= pipeline._batch_size:
                 results = pipeline(texts)
-                for item, probs in zip(items, results):
-                    # Now probs contains the probabilities directly
-                    item["register_probabilities"] = [round(float(p), 4) for p in probs]
+                # Add debug print for first result
+                if total_processed == 0:
+                    print("Sample result format:", results[0])
+
+                for item, preds in zip(items, results):
+                    item["register_probabilities"] = [
+                        round(float(pred["score"]), 4) for pred in preds
+                    ]
                     out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
                 out_f.flush()
                 total_processed += len(texts)
@@ -65,8 +70,10 @@ def process_file(input_file, output_file):
         # Process remaining items
         if texts:
             results = pipeline(texts)
-            for item, probs in zip(items, results):
-                item["register_probabilities"] = [round(float(p), 4) for p in probs]
+            for item, preds in zip(items, results):
+                item["register_probabilities"] = [
+                    round(float(pred["score"]), 4) for pred in preds
+                ]
                 out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
             out_f.flush()
             total_processed += len(texts)

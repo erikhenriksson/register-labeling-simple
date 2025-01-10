@@ -15,20 +15,25 @@ os.environ["XDG_CACHE_HOME"] = ".hf/xdg_cache_home"
 model_path = "/scratch/project_2011770/bge-2048"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Load config to verify number of labels
+# Load and modify config
 config = transformers.AutoConfig.from_pretrained(model_path)
+config.problem_type = "multi_label_classification"
 print(f"Number of labels in model: {config.num_labels}")
+
+# Load model with modified config
+model = transformers.AutoModelForSequenceClassification.from_pretrained(
+    model_path, config=config
+)
 
 pipeline = transformers.pipeline(
     task="text-classification",
-    model=model_path,
+    model=model,
     tokenizer="xlm-roberta-large",
     function_to_apply="sigmoid",
     batch_size=64,
     max_length=512,
     truncation=True,
     device=device,
-    problem_type="multi_label_classification",  # Explicitly set multilabel
 )
 
 

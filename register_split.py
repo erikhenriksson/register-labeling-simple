@@ -63,6 +63,10 @@ def process_file(input_file: str, threshold: float):
     base_dir = os.path.dirname(input_file)
     filename = os.path.basename(input_file)
 
+    # Create root splits directory
+    splits_dir = os.path.join(base_dir, "splits")
+    os.makedirs(splits_dir, exist_ok=True)
+
     with open(input_file, "r") as f:
         for line in f:
             try:
@@ -75,8 +79,8 @@ def process_file(input_file: str, threshold: float):
                 # Create directory name from sorted, comma-separated labels, or "none" if no labels
                 dir_name = ",".join(sorted(active_labels)) if active_labels else "none"
 
-                # Create directory if it doesn't exist
-                output_dir = os.path.join(base_dir, dir_name)
+                # Create directory under splits directory
+                output_dir = os.path.join(splits_dir, dir_name)
                 os.makedirs(output_dir, exist_ok=True)
 
                 # Write to output file

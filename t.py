@@ -87,8 +87,11 @@ def process_jsonl_file(file_path: str) -> tuple:
             if len(record_labels) > 1:
                 label_counter["+".join(sorted(record_labels))] += 1
             # If single label, count it individually
-            else:
+            elif len(record_labels) == 1:
                 label_counter[next(iter(record_labels))] += 1
+            # If no labels pass threshold, count as "none"
+            else:
+                label_counter["none"] += 1
 
     # Calculate percentages
     label_percentages = {

@@ -37,6 +37,7 @@ def process_probabilities(
     labels_list: List[str],
     child_to_parent: Dict[str, str],
     threshold: float = 0.4,
+    parent_only: bool = False,
 ) -> Set[str]:
     """
     Process probability list and return labels that pass threshold,
@@ -61,10 +62,14 @@ def process_probabilities(
     # Get final labels that pass threshold
     final_labels = {label for label, prob in label_probs.items() if prob >= threshold}
 
+    # If parent_only mode is enabled, convert all labels to their parent categories
+    if parent_only:
+        final_labels = {child_to_parent.get(label, label) for label in final_labels}
+
     return final_labels
 
 
-def process_jsonl_file(file_path: str) -> tuple:
+def process_jsonl_file(file_path: str, parent_only: bool = False) -> tuple:
     """
     Process entire JSONL file and return label frequencies and percentages.
     """
@@ -84,7 +89,9 @@ def process_jsonl_file(file_path: str) -> tuple:
             probs = data["register_probabilities"]
 
             # Get labels for this record
-            record_labels = process_probabilities(probs, labels_list, child_to_parent)
+            record_labels = process_probabilities(
+                probs, labels_list, child_to_parent, parent_only=parent_only
+            )
 
             # Count hybrids vs non-hybrids
             if len(record_labels) > 1:
@@ -119,19 +126,46 @@ if __name__ == "__main__":
     parser.add_argument("file_path", help="Path to the JSONL file")
     args = parser.parse_args()
 
-    # Process the file
+    # Process the file - detailed analysis
     frequencies, percentages, total, hybrid_count, nonhybrid_count = process_jsonl_file(
-        args.file_path
+        args.file_path, parent_only=False
     )
 
-    # Print summary statistics
-    print(f"\nProcessed {total} records")
+    # Print detailed analysis
+    print("\n=== DETAILED ANALYSIS (All Labels) ===")
+    print(f"Processed {total} records")
     print(f"Hybrid combinations: {hybrid_count} ({(hybrid_count/total)*100:.2f}%)")
     print(f"Non-hybrid cases: {nonhybrid_count} ({(nonhybrid_count/total)*100:.2f}%)")
 
     print("\nDetailed Label Frequencies (sorted by frequency):")
     print("-" * 50)
-    # Sort by frequency (count) in descending order
     sorted_items = sorted(frequencies.items(), key=lambda x: (-x[1], x[0]))
     for label, count in sorted_items:
         print(f"{label}: {count} ({percentages[label]:.2f}%)")
+
+    # Process the file - parent categories only
+    (
+        parent_frequencies,
+        parent_percentages,
+        parent_total,
+        parent_hybrid_count,
+        parent_nonhybrid_count,
+    ) = process_jsonl_file(args.file_path, parent_only=True)
+
+    # Print parent-level analysis
+    print("\n\n=== PARENT CATEGORY ANALYSIS ===")
+    print(f"Processed {parent_total} records")
+    print(
+        f"Hybrid combinations: {parent_hybrid_count} ({(parent_hybrid_count/parent_total)*100:.2f}%)"
+    )
+    print(
+        f"Non-hybrid cases: {parent_nonhybrid_count} ({(parent_nonhybrid_count/parent_total)*100:.2f}%)"
+    )
+
+    print("\nParent Category Frequencies (sorted by frequency):")
+    print("-" * 50)
+    parent_sorted_items = sorted(
+        parent_frequencies.items(), key=lambda x: (-x[1], x[0])
+    )
+    for label, count in parent_sorted_items:
+        print(f"{label}: {count} ({parent_percentages[label]:.2f}%)")

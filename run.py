@@ -18,10 +18,9 @@ pipeline = transformers.pipeline(
     task="text-classification",
     model=model_path,
     tokenizer="xlm-roberta-large",
-    function_to_apply="sigmoid",  # For multilabel, we need sigmoid
-    return_all_scores=True,  # Get all scores
+    function_to_apply="sigmoid",
     batch_size=64,
-    max_length=2048,
+    max_length=512,
     truncation=True,
     device=device,
 )
@@ -53,10 +52,14 @@ def process_file(input_file, output_file):
             # Process when we have enough items to fill a batch
             if len(texts) >= pipeline._batch_size:
                 results = pipeline(texts)
-                for item, batch_result in zip(items, results):
-                    # For multilabel, we get scores directly
+                # Debug print for first batch
+                if total_processed == 0:
+                    print("First result format:", results[0])  # Let's see the structure
+
+                for item, result in zip(items, results):
+                    # Using the raw result which should be the probabilities
                     item["register_probabilities"] = [
-                        round(float(score), 4) for score in batch_result[0]["scores"]
+                        round(float(prob), 4) for prob in result
                     ]
                     out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
                 out_f.flush()
@@ -68,9 +71,9 @@ def process_file(input_file, output_file):
         # Process remaining items
         if texts:
             results = pipeline(texts)
-            for item, batch_result in zip(items, results):
+            for item, result in zip(items, results):
                 item["register_probabilities"] = [
-                    round(float(score), 4) for score in batch_result[0]["scores"]
+                    round(float(prob), 4) for prob in result
                 ]
                 out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
             out_f.flush()

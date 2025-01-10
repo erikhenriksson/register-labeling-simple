@@ -43,16 +43,25 @@ def process_probabilities(probabilities: List[float], threshold: float) -> List[
 
     # Second pass: handle parent-child relationships
     final_labels = set()
-    for label in active_labels:
+    active_labels_list = list(
+        active_labels
+    )  # Create a list to avoid modification during iteration
+
+    # First process child labels
+    for label in active_labels_list:
         parent = get_parent_label(label)
         if parent:
-            # If this is a child label, add it and remove its parent if present
+            # If this is a child label, add it
             final_labels.add(label)
-            active_labels.discard(parent)
-        else:
-            # If this is a parent label, only add it if none of its children are active
+            active_labels.discard(parent)  # Remove the parent if it exists
+
+    # Then process remaining parent labels
+    for label in active_labels:
+        if not get_parent_label(label):  # If this is a parent label
             children = set(LABELS_STRUCTURE[label])
-            if not children.intersection(active_labels):
+            if not children.intersection(
+                final_labels
+            ):  # Only add if none of its children are active
                 final_labels.add(label)
 
     return sorted(list(final_labels))

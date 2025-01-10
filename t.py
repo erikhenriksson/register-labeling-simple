@@ -83,7 +83,7 @@ def process_jsonl_file(file_path: str, parent_only: bool = False) -> tuple:
     nonhybrid_count = 0  # includes both single-label and none
     with open(file_path, "r") as f:
         for line in f:
-            if total_records > 1000:
+            if total_records > 2000:
                 continue
             total_records += 1
             data = json.loads(line)

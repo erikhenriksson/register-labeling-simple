@@ -52,11 +52,11 @@ def process_file(input_file, output_file):
             # Process when we have enough items to fill a batch
             if len(texts) >= pipeline._batch_size:
                 results = pipeline(texts)
-                for item, preds in zip(items, results):
-                    item["register_probabilities"] = [
-                        round(float(p["score"]), 4) for p in preds
-                    ]
+                for item, probs in zip(items, results):
+                    # Now probs contains the probabilities directly
+                    item["register_probabilities"] = [round(float(p), 4) for p in probs]
                     out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
+                out_f.flush()
                 total_processed += len(texts)
                 print(f"Processed batch. Total items processed: {total_processed}")
                 texts = []
@@ -65,11 +65,10 @@ def process_file(input_file, output_file):
         # Process remaining items
         if texts:
             results = pipeline(texts)
-            for item, preds in zip(items, results):
-                item["register_probabilities"] = [
-                    round(float(p["score"]), 4) for p in preds
-                ]
+            for item, probs in zip(items, results):
+                item["register_probabilities"] = [round(float(p), 4) for p in probs]
                 out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
+            out_f.flush()
             total_processed += len(texts)
             print(f"Processed final batch. Total items processed: {total_processed}")
 

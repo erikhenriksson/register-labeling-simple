@@ -5,7 +5,7 @@ from typing import List, Dict, Tuple
 from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 
 @dataclass

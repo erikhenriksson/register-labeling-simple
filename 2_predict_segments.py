@@ -98,14 +98,9 @@ class TextSegmenter:
     def evaluate_segmentation(
         self, sentence_embeddings: List[np.ndarray], segments: List[Segment]
     ) -> float:
-        """
-        Evaluate segmentation quality. Only favors splitting when segments are
-        more different from each other than they are internally similar.
-        """
         if len(segments) < 2:
             return 0.0
 
-        # Convert embeddings to numpy arrays
         embeddings_list = [
             np.array(
                 [sentence_embeddings[i] for i in range(seg.start_idx, seg.end_idx)]
@@ -126,8 +121,11 @@ class TextSegmenter:
                 )
         avg_dissimilarity = np.mean(dissimilarities)
 
-        # Only split if segments are more different than they are internally similar
-        return avg_dissimilarity - avg_cohesion
+        # Normalize both to [0,1] range
+        normalized_cohesion = (avg_cohesion + 1) / 2  # Maps [-1,1] to [0,1]
+        normalized_dissimilarity = avg_dissimilarity / 2  # Maps [0,2] to [0,1]
+
+        return normalized_dissimilarity - normalized_cohesion
 
     def get_valid_segmentations(
         self,

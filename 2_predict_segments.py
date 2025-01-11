@@ -33,129 +33,109 @@ class TextSegmenter:
             self.nlp.add_pipe("sentencizer")
 
         self.min_segment_length = min_segment_length
-        self.id2label = None  # Will be set when model is loaded
-
-        # Initialize model and tokenizer for register classification
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
-
         self.tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-large")
         self.model = self.model.to(self.device)
         self.model.eval()
-
-        # Enable hidden states output for embeddings
         self.model.config.output_hidden_states = True
-
-        # Store id2label mapping
         self.id2label = self.model.config.id2label
 
-    def get_embedding_and_probs(self, text: str) -> Tuple[List[float], List[float]]:
-        """Get both embedding and register probabilities for a text segment."""
-        with torch.no_grad():
-            inputs = self.tokenizer(
-                text,
-                padding=True,
-                truncation=True,
-                max_length=2048,
-                return_tensors="pt",
-            ).to(self.device)
-            outputs = self.model(**inputs)
+    def precompute_embeddings(self, sentences: List[str]):
+        """Precompute embeddings for all sentences in batches"""
+        embeddings = []
+        probs = []
+        batch_size = 32
 
-            # Get embeddings from the last hidden state
-            embedding = outputs.hidden_states[-1][:, 0, :].cpu().numpy()[0]
+        for i in range(0, len(sentences), batch_size):
+            batch = sentences[i : i + batch_size]
+            with torch.no_grad():
+                inputs = self.tokenizer(
+                    batch,
+                    padding=True,
+                    truncation=True,
+                    max_length=2048,
+                    return_tensors="pt",
+                ).to(self.device)
+                outputs = self.model(**inputs)
+                batch_embeddings = outputs.hidden_states[-1][:, 0, :].cpu().numpy()
+                batch_probs = torch.sigmoid(outputs.logits).cpu().numpy()
 
-            # Get probabilities using sigmoid for multilabel classification
-            probs = F.sigmoid(outputs.logits).cpu().numpy()[0]
+                embeddings.extend(batch_embeddings)
+                probs.extend(batch_probs)
 
-            return ([float(x) for x in embedding], [round(float(p), 3) for p in probs])
-
-    def get_embedding(self, text: str) -> List[float]:
-        """Get embedding for a text segment."""
-        embedding, _ = self.get_embedding_and_probs(text)
-        return embedding
-
-    def get_register_probs(self, text: str) -> List[float]:
-        """Get register probabilities for a text segment."""
-        _, probs = self.get_embedding_and_probs(text)
-        return probs
+        return embeddings, probs
 
     def split_to_sentences(self, text: str) -> List[str]:
-        """Split text into sentences using spaCy."""
+        """Split text into sentences using spaCy"""
         doc = self.nlp(text)
         return [sent.text.strip() for sent in doc.sents]
 
-    def compute_cohesion(self, embeddings: List[List[float]]) -> float:
-        """Compute average cosine similarity within a segment."""
+    def compute_cohesion(self, embeddings: np.ndarray) -> float:
+        """Compute average cosine similarity within a segment"""
         if len(embeddings) < 2:
             return 1.0
 
-        embeddings = np.array(embeddings)
-        similarities = []
-        for i in range(len(embeddings)):
-            for j in range(i + 1, len(embeddings)):
-                sim = np.dot(embeddings[i], embeddings[j]) / (
-                    np.linalg.norm(embeddings[i]) * np.linalg.norm(embeddings[j])
-                )
-                similarities.append(sim)
-        return float(np.mean(similarities))
+        # Normalize embeddings for faster cosine computation
+        normalized = embeddings / np.linalg.norm(embeddings, axis=1)[:, np.newaxis]
+        # Compute all pairwise similarities at once
+        similarities = np.dot(normalized, normalized.T)
+        # Get upper triangle excluding diagonal
+        mask = np.triu(np.ones_like(similarities), k=1).astype(bool)
+        return float(np.mean(similarities[mask]))
 
     def compute_dissimilarity(
-        self, embeddings1: List[List[float]], embeddings2: List[List[float]]
+        self, embeddings1: np.ndarray, embeddings2: np.ndarray
     ) -> float:
-        """Compute average cosine dissimilarity between two segments."""
-        embeddings1 = np.array(embeddings1)
-        embeddings2 = np.array(embeddings2)
-
-        similarities = []
-        for emb1 in embeddings1:
-            for emb2 in embeddings2:
-                sim = np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2))
-                similarities.append(sim)
+        """Compute average cosine dissimilarity between two segments"""
+        # Normalize embeddings
+        norm1 = embeddings1 / np.linalg.norm(embeddings1, axis=1)[:, np.newaxis]
+        norm2 = embeddings2 / np.linalg.norm(embeddings2, axis=1)[:, np.newaxis]
+        # Compute all similarities at once
+        similarities = np.dot(norm1, norm2.T)
         return float(1 - np.mean(similarities))
 
-    def evaluate_segmentation(self, segments: List[Segment]) -> float:
-        """Evaluate a segmentation based on cohesion and dissimilarity."""
+    def evaluate_segmentation(
+        self, sentence_embeddings: List[np.ndarray], segments: List[Segment]
+    ) -> float:
+        """Evaluate a segmentation based on cohesion and dissimilarity"""
         if len(segments) < 2:
             return 0.0
 
-        # Compute average internal cohesion
-        cohesions = []
-        for segment in segments:
-            sent_embeddings = [
-                self.get_embedding(sent)
-                for sent in self.split_to_sentences(segment.text)
-            ]
-            cohesions.append(self.compute_cohesion(sent_embeddings))
+        # Convert embeddings to numpy arrays
+        embeddings_list = [
+            np.array(
+                [sentence_embeddings[i] for i in range(seg.start_idx, seg.end_idx)]
+            )
+            for seg in segments
+        ]
+
+        # Compute cohesion for each segment
+        cohesions = [self.compute_cohesion(emb) for emb in embeddings_list]
         avg_cohesion = np.mean(cohesions)
 
-        # Compute average inter-segment dissimilarity
+        # Compute dissimilarity between all segment pairs
         dissimilarities = []
-        for i in range(len(segments)):
-            for j in range(i + 1, len(segments)):
-                sent_embeddings1 = [
-                    self.get_embedding(sent)
-                    for sent in self.split_to_sentences(segments[i].text)
-                ]
-                sent_embeddings2 = [
-                    self.get_embedding(sent)
-                    for sent in self.split_to_sentences(segments[j].text)
-                ]
+        for i in range(len(embeddings_list)):
+            for j in range(i + 1, len(embeddings_list)):
                 dissimilarities.append(
-                    self.compute_dissimilarity(sent_embeddings1, sent_embeddings2)
+                    self.compute_dissimilarity(embeddings_list[i], embeddings_list[j])
                 )
         avg_dissimilarity = np.mean(dissimilarities)
 
-        # Combine metrics (equal weight)
         return 0.5 * avg_cohesion + 0.5 * avg_dissimilarity
 
-    def get_valid_segmentations(self, sentences: List[str]) -> List[List[Segment]]:
-        """Get all valid segmentations based on minimum length constraint."""
+    def get_valid_segmentations(
+        self,
+        sentences: List[str],
+        sentence_embeddings: List[np.ndarray],
+        sentence_probs: List[np.ndarray],
+    ) -> List[List[Segment]]:
+        """Get all valid segmentations based on minimum length constraint"""
         valid_segmentations = []
         total_sentences = len(sentences)
 
-        # Try different split points
         for split_idx in range(1, total_sentences):
-            # Check all possible segment combinations
             segment1 = " ".join(sentences[:split_idx])
             segment2 = " ".join(sentences[split_idx:])
 
@@ -163,63 +143,68 @@ class TextSegmenter:
                 len(segment1) >= self.min_segment_length
                 and len(segment2) >= self.min_segment_length
             ):
-                # Create segments with embeddings and probabilities
                 seg1 = Segment(
                     text=segment1,
                     start_idx=0,
                     end_idx=split_idx,
-                    embedding=self.get_embedding(segment1),
-                    register_probs=self.get_register_probs(segment1),
+                    embedding=np.mean(sentence_embeddings[:split_idx], axis=0).tolist(),
+                    register_probs=np.mean(sentence_probs[:split_idx], axis=0).tolist(),
                 )
                 seg2 = Segment(
                     text=segment2,
                     start_idx=split_idx,
                     end_idx=total_sentences,
-                    embedding=self.get_embedding(segment2),
-                    register_probs=self.get_register_probs(segment2),
+                    embedding=np.mean(sentence_embeddings[split_idx:], axis=0).tolist(),
+                    register_probs=np.mean(sentence_probs[split_idx:], axis=0).tolist(),
                 )
                 valid_segmentations.append([seg1, seg2])
 
         return valid_segmentations
 
     def segment_recursively(self, text: str) -> List[Segment]:
-        """Recursively segment text until no valid segmentations remain."""
+        """Recursively segment text until no valid segmentations remain"""
+        # Split into sentences and precompute embeddings once
         sentences = self.split_to_sentences(text)
         if len(sentences) < 2 or len(text) < self.min_segment_length * 2:
-            # Base case: can't segment further
+            embedding, probs = self.precompute_embeddings([text])
             return [
                 Segment(
                     text=text,
                     start_idx=0,
                     end_idx=len(sentences),
-                    embedding=self.get_embedding(text),
-                    register_probs=self.get_register_probs(text),
+                    embedding=embedding[0].tolist(),
+                    register_probs=probs[0].tolist(),
                 )
             ]
 
+        # Precompute embeddings for all sentences
+        sentence_embeddings, sentence_probs = self.precompute_embeddings(sentences)
+
         # Get all valid segmentations
-        valid_segmentations = self.get_valid_segmentations(sentences)
+        valid_segmentations = self.get_valid_segmentations(
+            sentences, sentence_embeddings, sentence_probs
+        )
         if not valid_segmentations:
             return [
                 Segment(
                     text=text,
                     start_idx=0,
                     end_idx=len(sentences),
-                    embedding=self.get_embedding(text),
-                    register_probs=self.get_register_probs(text),
+                    embedding=np.mean(sentence_embeddings, axis=0).tolist(),
+                    register_probs=np.mean(sentence_probs, axis=0).tolist(),
                 )
             ]
 
-        # Evaluate all segmentations and choose the best
+        # Find best segmentation
         best_score = -float("inf")
         best_segmentation = None
         for segmentation in valid_segmentations:
-            score = self.evaluate_segmentation(segmentation)
+            score = self.evaluate_segmentation(sentence_embeddings, segmentation)
             if score > best_score:
                 best_score = score
                 best_segmentation = segmentation
 
-        # Recursively segment each part of the best segmentation
+        # Recursively segment each part
         final_segments = []
         for segment in best_segmentation:
             final_segments.extend(self.segment_recursively(segment.text))

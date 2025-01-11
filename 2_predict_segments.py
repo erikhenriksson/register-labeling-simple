@@ -211,7 +211,19 @@ class TextSegmenter:
                 best_score = score
                 best_segmentation = segmentation
 
-        # Recursively segment each part
+        # Only split if the best score is actually positive
+        if best_score <= 0:
+            return [
+                Segment(
+                    text=text,
+                    start_idx=0,
+                    end_idx=len(sentences),
+                    embedding=np.mean(sentence_embeddings, axis=0).tolist(),
+                    register_probs=np.mean(sentence_probs, axis=0).tolist(),
+                )
+            ]
+
+        # Otherwise proceed with recursive splitting
         final_segments = []
         for segment in best_segmentation:
             final_segments.extend(self.segment_recursively(segment.text))

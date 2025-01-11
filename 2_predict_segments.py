@@ -199,17 +199,17 @@ class TextSegmenter:
                 )
             ]
 
-        # Find best segmentation
-        best_score = -float("inf")
+        # Find best segmentation, but only if it improves over no split
+        best_score = 0  # Changed from -float("inf") since we only want positive scores
         best_segmentation = None
         for segmentation in valid_segmentations:
             score = self.evaluate_segmentation(sentence_embeddings, segmentation)
-            if score > best_score:
+            if score > best_score:  # Will only update if score is positive
                 best_score = score
                 best_segmentation = segmentation
 
-        # Only split if the best score is actually positive
-        if best_score <= 0:
+        # If no positive scoring segmentation found, return single segment
+        if best_segmentation is None:
             return [
                 Segment(
                     text=text,
@@ -220,7 +220,7 @@ class TextSegmenter:
                 )
             ]
 
-        # Otherwise proceed with recursive splitting
+        # Recursively segment each part
         final_segments = []
         for segment in best_segmentation:
             final_segments.extend(self.segment_recursively(segment.text))

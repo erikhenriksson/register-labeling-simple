@@ -13,6 +13,8 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 os.environ["HF_HOME"] = ".hf/hf_home"
 os.environ["XDG_CACHE_HOME"] = ".hf/xdg_cache_home"
 
+model_path = "/scratch/project_2011770/bge-2048"
+
 
 @dataclass
 class Segment:
@@ -35,9 +37,8 @@ class TextSegmenter:
 
         # Initialize model and tokenizer for register classification
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            "TurkuNLP/web-register-classification-multilingual"
-        )
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
+
         self.tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-large")
         self.model = self.model.to(self.device)
         self.model.eval()

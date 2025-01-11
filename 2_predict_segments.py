@@ -1,11 +1,17 @@
 import json
 import spacy
+import os
 import numpy as np
 from typing import List, Dict, Tuple
 from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+
+# Set environment variables for HuggingFace
+os.environ["HF_HOME"] = ".hf/hf_home"
+os.environ["XDG_CACHE_HOME"] = ".hf/xdg_cache_home"
 
 
 @dataclass

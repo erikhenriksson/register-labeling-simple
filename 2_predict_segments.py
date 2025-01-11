@@ -131,7 +131,7 @@ class TextSegmenter:
         sentence_embeddings: List[np.ndarray],
         sentence_probs: List[np.ndarray],
     ) -> List[List[Segment]]:
-        """Get all valid segmentations based on minimum length constraint"""
+        """Get all valid segmentations based on minimum length and label set differences."""
         valid_segmentations = []
         total_sentences = len(sentences)
 
@@ -143,21 +143,33 @@ class TextSegmenter:
                 len(segment1) >= self.min_segment_length
                 and len(segment2) >= self.min_segment_length
             ):
-                seg1 = Segment(
-                    text=segment1,
-                    start_idx=0,
-                    end_idx=split_idx,
-                    embedding=np.mean(sentence_embeddings[:split_idx], axis=0).tolist(),
-                    register_probs=np.mean(sentence_probs[:split_idx], axis=0).tolist(),
-                )
-                seg2 = Segment(
-                    text=segment2,
-                    start_idx=split_idx,
-                    end_idx=total_sentences,
-                    embedding=np.mean(sentence_embeddings[split_idx:], axis=0).tolist(),
-                    register_probs=np.mean(sentence_probs[split_idx:], axis=0).tolist(),
-                )
-                valid_segmentations.append([seg1, seg2])
+                seg1_probs = np.mean(sentence_probs[:split_idx], axis=0).tolist()
+                seg2_probs = np.mean(sentence_probs[split_idx:], axis=0).tolist()
+
+                seg1_labels = set(get_register_labels(seg1_probs, self.id2label))
+                seg2_labels = set(get_register_labels(seg2_probs, self.id2label))
+
+                # Only add segmentation if label sets are different
+                if seg1_labels != seg2_labels:
+                    seg1 = Segment(
+                        text=segment1,
+                        start_idx=0,
+                        end_idx=split_idx,
+                        embedding=np.mean(
+                            sentence_embeddings[:split_idx], axis=0
+                        ).tolist(),
+                        register_probs=seg1_probs,
+                    )
+                    seg2 = Segment(
+                        text=segment2,
+                        start_idx=split_idx,
+                        end_idx=total_sentences,
+                        embedding=np.mean(
+                            sentence_embeddings[split_idx:], axis=0
+                        ).tolist(),
+                        register_probs=seg2_probs,
+                    )
+                    valid_segmentations.append([seg1, seg2])
 
         return valid_segmentations
 

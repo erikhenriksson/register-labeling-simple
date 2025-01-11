@@ -99,8 +99,8 @@ class TextSegmenter:
         self, sentence_embeddings: List[np.ndarray], segments: List[Segment]
     ) -> float:
         """
-        Evaluate segmentation quality. Much more conservative about splitting by requiring
-        dissimilarity to be substantially higher than cohesion.
+        Evaluate segmentation quality. Only favors splitting when segments are
+        more different from each other than they are internally similar.
         """
         if len(segments) < 2:
             return 0.0
@@ -126,11 +126,8 @@ class TextSegmenter:
                 )
         avg_dissimilarity = np.mean(dissimilarities)
 
-        # Only split if dissimilarity is substantially higher
-        # Using ratio instead of difference to make it more stringent
-        return (
-            avg_dissimilarity / avg_cohesion - 1.5
-        )  # Requiring 50% more dissimilarity than cohesion
+        # Only split if segments are more different than they are internally similar
+        return avg_dissimilarity - avg_cohesion
 
     def get_valid_segmentations(
         self,

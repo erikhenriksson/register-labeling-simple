@@ -113,8 +113,8 @@ class TextSegmenter:
         # Compute cohesion for each segment
         cohesions = [self.compute_cohesion(emb) for emb in embeddings_list]
         avg_cohesion = np.mean(cohesions)
-        print(f"Cohesion per segment: {cohesions}")
-        print(f"Average cohesion: {avg_cohesion}")
+        #print(f"Cohesion per segment: {cohesions}")
+        #print(f"Average cohesion: {avg_cohesion}")
 
         # Compute dissimilarity between all segment pairs
         dissimilarities = []
@@ -124,17 +124,17 @@ class TextSegmenter:
                     embeddings_list[i], embeddings_list[j]
                 )
                 dissimilarities.append(diss)
-                print(f"Dissimilarity between segments {i} and {j}: {diss}")
+                #print(f"Dissimilarity between segments {i} and {j}: {diss}")
 
         avg_dissimilarity = np.mean(dissimilarities)
-        print(f"Average dissimilarity: {avg_dissimilarity}")
+        #print(f"Average dissimilarity: {avg_dissimilarity}")
 
         # Score using ratio of dissimilarity to cohesion
         # Subtract 1 so positive score means dissimilarity > cohesion
         score = avg_dissimilarity / avg_cohesion - 1.0
 
-        print(f"Final score (dissimilarity/cohesion - 1): {score}")
-        print("----------------------------------------")
+        #print(f"Final score (dissimilarity/cohesion - 1): {score}")
+        #print("----------------------------------------")
 
         return score
 
@@ -176,7 +176,6 @@ class TextSegmenter:
 
     def segment_recursively(self, text: str) -> List[Segment]:
         """Recursively segment text until no valid segmentations remain"""
-        # Split into sentences and precompute embeddings once
         sentences = self.split_to_sentences(text)
         if len(sentences) < 2 or len(text) < self.min_segment_length * 2:
             embedding, probs = self.precompute_embeddings([text])
@@ -190,13 +189,11 @@ class TextSegmenter:
                 )
             ]
 
-        # Precompute embeddings for all sentences
         sentence_embeddings, sentence_probs = self.precompute_embeddings(sentences)
-
-        # Get all valid segmentations
         valid_segmentations = self.get_valid_segmentations(
             sentences, sentence_embeddings, sentence_probs
         )
+
         if not valid_segmentations:
             return [
                 Segment(
@@ -208,16 +205,17 @@ class TextSegmenter:
                 )
             ]
 
-        # Find best segmentation, but only if it improves over no split
-        best_score = 0  # Changed from -float("inf") since we only want positive scores
+        # Find best segmentation that meets our threshold
+        SPLIT_THRESHOLD = -0.5
+        best_score = SPLIT_THRESHOLD  # Changed from 0 to -0.5
         best_segmentation = None
+
         for segmentation in valid_segmentations:
             score = self.evaluate_segmentation(sentence_embeddings, segmentation)
-            if score > best_score:  # Will only update if score is positive
+            if score > best_score:
                 best_score = score
                 best_segmentation = segmentation
 
-        # If no positive scoring segmentation found, return single segment
         if best_segmentation is None:
             return [
                 Segment(
@@ -229,7 +227,6 @@ class TextSegmenter:
                 )
             ]
 
-        # Recursively segment each part
         final_segments = []
         for segment in best_segmentation:
             final_segments.extend(self.segment_recursively(segment.text))

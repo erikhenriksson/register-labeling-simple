@@ -25,6 +25,7 @@ class TextSegmenter:
             self.nlp.add_pipe("sentencizer")
 
         self.min_segment_length = min_segment_length
+        self.id2label = None  # Will be set when model is loaded
 
         # Initialize model and tokenizer for register classification
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -37,6 +38,9 @@ class TextSegmenter:
 
         # Enable hidden states output for embeddings
         self.model.config.output_hidden_states = True
+
+        # Store id2label mapping
+        self.id2label = self.model.config.id2label
 
     def get_embedding_and_probs(self, text: str) -> Tuple[List[float], List[float]]:
         """Get both embedding and register probabilities for a text segment."""
@@ -216,32 +220,77 @@ class TextSegmenter:
         return final_segments
 
 
-def process_file(input_path: str, output_path: str, min_segment_length: int = 300):
+def get_register_labels(
+    probs: List[float], id2label: Dict[int, str], threshold: float = 0.5
+) -> List[str]:
+    """Convert probabilities to register labels using the model's id2label mapping."""
+    return [id2label[i] for i, prob in enumerate(probs) if prob > threshold]
+
+
+def format_segments(
+    segments: List[Segment], doc_id: str, id2label: Dict[int, str]
+) -> str:
+    """Format segments for pretty printing."""
+    output = [f"Text [{doc_id}]"]
+
+    for i, segment in enumerate(segments, 1):
+        output.append("---")
+        labels = get_register_labels(segment.register_probs, id2label)
+        output.append(f"Segment {i}: [{', '.join(labels)}]")
+        # Truncate text if too long for display
+        display_text = (
+            segment.text[:200] + "..." if len(segment.text) > 200 else segment.text
+        )
+        output.append(f"Text: {display_text}")
+
+    output.append("---------------------")
+    return "\n".join(output)
+
+
+def process_file(
+    input_path: str,
+    output_path: str = None,
+    min_segment_length: int = 300,
+    print_only: bool = False,
+):
     """Process input JSONL file and write segmented output."""
     segmenter = TextSegmenter(min_segment_length=min_segment_length)
 
-    with open(input_path, "r", encoding="utf-8") as fin, open(
-        output_path, "w", encoding="utf-8"
-    ) as fout:
+    with open(input_path, "r", encoding="utf-8") as fin:
+        # Open output file only if not in print_only mode
+        fout = open(output_path, "w", encoding="utf-8") if output_path else None
 
-        for line in fin:
-            # Parse input JSON
-            data = json.loads(line.strip())
-            text = data["text"]
+        try:
+            for line_num, line in enumerate(fin, 1):
+                # Parse input JSON
+                data = json.loads(line.strip())
+                text = data["text"]
 
-            # Perform hierarchical segmentation
-            segments = segmenter.segment_recursively(text)
+                # Perform hierarchical segmentation
+                segments = segmenter.segment_recursively(text)
 
-            # Add segmentation information to output
-            data["segmentation"] = {
-                "texts": [seg.text for seg in segments],
-                "register_probabilities": [seg.register_probs for seg in segments],
-                "embeddings": [seg.embedding for seg in segments],
-            }
+                if print_only:
+                    # Print formatted segments
+                    print(
+                        format_segments(segments, f"DOC_{line_num}", segmenter.id2label)
+                    )
+                else:
+                    # Add segmentation information to output
+                    data["segmentation"] = {
+                        "texts": [seg.text for seg in segments],
+                        "register_probabilities": [
+                            seg.register_probs for seg in segments
+                        ],
+                        "embeddings": [seg.embedding for seg in segments],
+                    }
 
-            # Write updated JSON to output file
-            fout.write(json.dumps(data, ensure_ascii=False) + "\n")
-            fout.flush()
+                    # Write updated JSON to output file
+                    fout.write(json.dumps(data, ensure_ascii=False) + "\n")
+                    fout.flush()
+
+        finally:
+            if fout:
+                fout.close()
 
 
 if __name__ == "__main__":
@@ -249,10 +298,22 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("input_file", help="Input JSONL file")
-    parser.add_argument("output_file", help="Output JSONL file")
+    parser.add_argument(
+        "output_file",
+        nargs="?",
+        help="Output JSONL file (optional if --print-only is used)",
+    )
     parser.add_argument(
         "--min-length", type=int, default=300, help="Minimum segment length"
     )
+    parser.add_argument(
+        "--print-only",
+        action="store_true",
+        help="Print segments instead of saving to file",
+    )
     args = parser.parse_args()
 
-    process_file(args.input_file, args.output_file, args.min_length)
+    if args.print_only and args.output_file:
+        parser.error("Cannot specify output file when using --print-only")
+
+    process_file(args.input_file, args.output_file, args.min_length, args.print_only)

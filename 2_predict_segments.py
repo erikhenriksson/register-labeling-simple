@@ -98,6 +98,7 @@ class TextSegmenter:
     def evaluate_segmentation(
         self, sentence_embeddings: List[np.ndarray], segments: List[Segment]
     ) -> float:
+        """Evaluate segmentation quality with debug printing."""
         if len(segments) < 2:
             return 0.0
 
@@ -112,20 +113,34 @@ class TextSegmenter:
         cohesions = [self.compute_cohesion(emb) for emb in embeddings_list]
         avg_cohesion = np.mean(cohesions)
 
+        # Print individual cohesions
+        print(f"Cohesion per segment: {cohesions}")
+        print(f"Average cohesion: {avg_cohesion}")
+
         # Compute dissimilarity between all segment pairs
         dissimilarities = []
         for i in range(len(embeddings_list)):
             for j in range(i + 1, len(embeddings_list)):
-                dissimilarities.append(
-                    self.compute_dissimilarity(embeddings_list[i], embeddings_list[j])
+                diss = self.compute_dissimilarity(
+                    embeddings_list[i], embeddings_list[j]
                 )
+                dissimilarities.append(diss)
+                print(f"Dissimilarity between segments {i} and {j}: {diss}")
+
         avg_dissimilarity = np.mean(dissimilarities)
+        print(f"Average dissimilarity: {avg_dissimilarity}")
 
         # Normalize both to [0,1] range
-        normalized_cohesion = (avg_cohesion + 1) / 2  # Maps [-1,1] to [0,1]
-        normalized_dissimilarity = avg_dissimilarity / 2  # Maps [0,2] to [0,1]
+        normalized_cohesion = (avg_cohesion + 1) / 2
+        normalized_dissimilarity = avg_dissimilarity / 2
 
-        return normalized_dissimilarity - normalized_cohesion
+        final_score = normalized_dissimilarity - normalized_cohesion
+        print(
+            f"Final score (normalized_dissimilarity - normalized_cohesion): {final_score}"
+        )
+        print("----------------------------------------")
+
+    return final_score
 
     def get_valid_segmentations(
         self,

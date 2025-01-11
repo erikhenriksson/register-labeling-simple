@@ -98,11 +98,11 @@ class TextSegmenter:
     def evaluate_segmentation(
         self, sentence_embeddings: List[np.ndarray], segments: List[Segment]
     ) -> float:
-        """
-        Evaluate segmentation quality comparing ratio of dissimilarity to cohesion.
-        Returns positive score only when segments are more different from each other
-        than they are internally cohesive.
-        """
+        """Evaluate a segmentation based on cohesion and dissimilarity"""
+        if len(segments) < 2:
+            return 0.0
+
+        # Convert embeddings to numpy arrays
         embeddings_list = [
             np.array(
                 [sentence_embeddings[i] for i in range(seg.start_idx, seg.end_idx)]
@@ -113,30 +113,17 @@ class TextSegmenter:
         # Compute cohesion for each segment
         cohesions = [self.compute_cohesion(emb) for emb in embeddings_list]
         avg_cohesion = np.mean(cohesions)
-        #print(f"Cohesion per segment: {cohesions}")
-        #print(f"Average cohesion: {avg_cohesion}")
 
         # Compute dissimilarity between all segment pairs
         dissimilarities = []
         for i in range(len(embeddings_list)):
             for j in range(i + 1, len(embeddings_list)):
-                diss = self.compute_dissimilarity(
-                    embeddings_list[i], embeddings_list[j]
+                dissimilarities.append(
+                    self.compute_dissimilarity(embeddings_list[i], embeddings_list[j])
                 )
-                dissimilarities.append(diss)
-                #print(f"Dissimilarity between segments {i} and {j}: {diss}")
-
         avg_dissimilarity = np.mean(dissimilarities)
-        #print(f"Average dissimilarity: {avg_dissimilarity}")
 
-        # Score using ratio of dissimilarity to cohesion
-        # Subtract 1 so positive score means dissimilarity > cohesion
-        score = avg_dissimilarity / avg_cohesion - 1.0
-
-        #print(f"Final score (dissimilarity/cohesion - 1): {score}")
-        #print("----------------------------------------")
-
-        return score
+        return 0.5 * avg_cohesion + 0.5 * avg_dissimilarity
 
     def get_valid_segmentations(
         self,
@@ -176,6 +163,7 @@ class TextSegmenter:
 
     def segment_recursively(self, text: str) -> List[Segment]:
         """Recursively segment text until no valid segmentations remain"""
+        # Split into sentences and precompute embeddings once
         sentences = self.split_to_sentences(text)
         if len(sentences) < 2 or len(text) < self.min_segment_length * 2:
             embedding, probs = self.precompute_embeddings([text])
@@ -189,11 +177,13 @@ class TextSegmenter:
                 )
             ]
 
+        # Precompute embeddings for all sentences
         sentence_embeddings, sentence_probs = self.precompute_embeddings(sentences)
+
+        # Get all valid segmentations
         valid_segmentations = self.get_valid_segmentations(
             sentences, sentence_embeddings, sentence_probs
         )
-
         if not valid_segmentations:
             return [
                 Segment(
@@ -205,28 +195,16 @@ class TextSegmenter:
                 )
             ]
 
-        # Find best segmentation that meets our threshold
-        SPLIT_THRESHOLD = -0.5
-        best_score = SPLIT_THRESHOLD  # Changed from 0 to -0.5
+        # Find best segmentation
+        best_score = -float("inf")
         best_segmentation = None
-
         for segmentation in valid_segmentations:
             score = self.evaluate_segmentation(sentence_embeddings, segmentation)
             if score > best_score:
                 best_score = score
                 best_segmentation = segmentation
 
-        if best_segmentation is None:
-            return [
-                Segment(
-                    text=text,
-                    start_idx=0,
-                    end_idx=len(sentences),
-                    embedding=np.mean(sentence_embeddings, axis=0).tolist(),
-                    register_probs=np.mean(sentence_probs, axis=0).tolist(),
-                )
-            ]
-
+        # Recursively segment each part
         final_segments = []
         for segment in best_segmentation:
             final_segments.extend(self.segment_recursively(segment.text))

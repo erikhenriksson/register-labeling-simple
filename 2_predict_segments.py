@@ -140,7 +140,7 @@ class TextSegmenter:
         )
         print("----------------------------------------")
 
-    return final_score
+        return final_score
 
     def get_valid_segmentations(
         self,

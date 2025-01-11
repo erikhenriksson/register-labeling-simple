@@ -246,7 +246,7 @@ def format_segments(
         output.append(f"Segment {i}: [{', '.join(labels)}]")
         # Truncate text if too long for display
         display_text = (
-            segment.text[:200] + "..." if len(segment.text) > 200 else segment.text
+            segment.text[:200] + "..." if len(segment.text) > 100000 else segment.text
         )
         output.append(f"Text: {display_text}")
 

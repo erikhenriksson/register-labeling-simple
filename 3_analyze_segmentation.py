@@ -32,145 +32,28 @@ REGISTER_NAMES = [
     "ed",  # IP (Interactive/Interpersonal)
 ]
 
-# Mapping of sub-categories to main categories
-REGISTER_MAPPING = {
-    # Main categories map to themselves
-    "MT": "MT",
-    "LY": "LY",
-    "SP": "SP",
-    "ID": "ID",
-    "NA": "NA",
-    "HI": "HI",
-    "IN": "IN",
-    "OP": "OP",
-    "IP": "IP",
-    # Sub-categories map to their parents
-    "it": "SP",  # Spoken
-    "ne": "NA",
-    "sr": "NA",
-    "nb": "NA",  # Narrative
-    "re": "HI",  # How-to/Instructional
-    "en": "IN",
-    "ra": "IN",
-    "dtp": "IN",
-    "fi": "IN",
-    "lt": "IN",  # Informational
-    "rv": "OP",
-    "ob": "OP",
-    "rs": "OP",
-    "av": "OP",  # Opinion
-    "ds": "IP",
-    "ed": "IP",  # Interactive/Interpersonal
-}
 
-
-def convert_to_dominant_registers(
+def convert_to_multilabel_registers(
     probabilities: np.ndarray, threshold: float = 0.5
 ) -> np.ndarray:
-    """Convert probabilities to binary labels, keeping only dominant registers above threshold"""
-    binary = np.zeros_like(probabilities)
-    max_prob = np.max(probabilities)
-    if max_prob >= threshold:
-        binary[probabilities >= max_prob] = 1
-    return binary
-
-
-def map_to_parent_registers(registers: np.ndarray) -> np.ndarray:
-    """Map sub-category registers to their parent categories"""
-    # Create mapping array
-    mapping = np.zeros((len(REGISTER_NAMES), 9))  # 9 is the number of main categories
-    for i, reg in enumerate(REGISTER_NAMES):
-        parent_idx = REGISTER_NAMES.index(REGISTER_MAPPING[reg])
-        mapping[i, parent_idx] = 1
-
-    # Apply mapping
-    mapped_registers = registers @ mapping
-    # Normalize to ensure we still have binary labels
-    mapped_registers = (mapped_registers > 0).astype(float)
-    return mapped_registers
-
-
-def collect_data(
-    input_jsonl_path: str, threshold: float = 0.5, limit: int = 100
-) -> Dict[str, np.ndarray]:
-    """Collect document and segment level data with dominant register labeling"""
-    document_embeddings = []
-    document_registers = []
-    segment_embeddings = []
-    segment_registers = []
-
-    # Add counters for debugging
-    total_segments = 0
-    segments_per_doc = []
-
-    with open(input_jsonl_path, "r") as f:
-        for i, line in enumerate(f):
-            if i >= limit:
-                break
-
-            data = json.loads(line)
-
-            # Process document level
-            doc_reg = convert_to_dominant_registers(
-                np.array(data["register_probabilities"]), threshold
-            )
-            document_embeddings.append(data["embedding"])
-            document_registers.append(doc_reg)
-
-            # Count segments in this document
-            num_segments = len(data["segmentation"]["embeddings"])
-            segments_per_doc.append(num_segments)
-            total_segments += num_segments
-
-            # Process segment level
-            for emb, probs in zip(
-                data["segmentation"]["embeddings"],
-                data["segmentation"]["register_probabilities"],
-            ):
-                seg_reg = convert_to_dominant_registers(np.array(probs), threshold)
-                segment_embeddings.append(emb)
-                segment_registers.append(seg_reg)
-
-    # Print diagnostic information
-    print(f"\nDiagnostic Information:")
-    print(f"Total documents processed: {len(document_embeddings)}")
-    print(f"Total segments found: {total_segments}")
-    print(f"Average segments per document: {np.mean(segments_per_doc):.2f}")
-    print(
-        f"Min/Max segments per document: {min(segments_per_doc)}/{max(segments_per_doc)}"
-    )
-
-    # Print register distribution
-    doc_reg_dist = np.sum(np.array(document_registers), axis=0)
-    seg_reg_dist = np.sum(np.array(segment_registers), axis=0)
-    print("\nRegister distribution (doc level vs segment level):")
-    for i, reg in enumerate(REGISTER_NAMES):
-        print(f"{reg:>4}: {doc_reg_dist[i]:>4} docs, {seg_reg_dist[i]:>4} segments")
-
-    return {
-        "document_embeddings": np.array(document_embeddings),
-        "document_registers": np.array(document_registers),
-        "segment_embeddings": np.array(segment_embeddings),
-        "segment_registers": np.array(segment_registers),
-    }
+    """Convert probabilities to binary labels, marking all registers above threshold"""
+    return (probabilities >= threshold).astype(np.float32)
 
 
 def compute_register_variances(
-    embeddings: np.ndarray, registers: np.ndarray, is_segment: bool = False
+    embeddings: np.ndarray, registers: np.ndarray
 ) -> Dict[str, np.ndarray]:
-    """Compute embedding variance for each dominant register"""
-    # Map to parent registers if processing segments
-    if is_segment:
-        registers = map_to_parent_registers(registers)
-
+    """Compute embedding variance for each register, counting texts for all registers above threshold"""
     n_registers = registers.shape[1]
     register_variances = []
     register_counts = []
 
     for reg_idx in range(n_registers):
+        # Get embeddings where this register is present (prob >= threshold)
         mask = registers[:, reg_idx] == 1
         if np.sum(mask) > 0:
             reg_embeddings = embeddings[mask]
+            # Compute variance across all embedding dimensions
             variance = np.mean(np.var(reg_embeddings, axis=0))
             count = np.sum(mask)
         else:
@@ -186,16 +69,55 @@ def compute_register_variances(
     }
 
 
+def collect_data(
+    input_jsonl_path: str, threshold: float = 0.5, limit: int = 100
+) -> Dict[str, np.ndarray]:
+    """Collect document and segment level data with multilabel register labeling"""
+    document_embeddings = []
+    document_registers = []
+    segment_embeddings = []
+    segment_registers = []
+
+    with open(input_jsonl_path, "r") as f:
+        for i, line in enumerate(f):
+            if i >= limit:
+                break
+
+            data = json.loads(line)
+
+            # Process document level
+            doc_reg = convert_to_multilabel_registers(
+                np.array(data["register_probabilities"]), threshold
+            )
+            document_embeddings.append(data["embedding"])
+            document_registers.append(doc_reg)
+
+            # Process segment level
+            for emb, probs in zip(
+                data["segmentation"]["embeddings"],
+                data["segmentation"]["register_probabilities"],
+            ):
+                seg_reg = convert_to_multilabel_registers(np.array(probs), threshold)
+                segment_embeddings.append(emb)
+                segment_registers.append(seg_reg)
+
+    return {
+        "document_embeddings": np.array(document_embeddings),
+        "document_registers": np.array(document_registers),
+        "segment_embeddings": np.array(segment_embeddings),
+        "segment_registers": np.array(segment_registers),
+    }
+
+
 def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
-    """Plot comparison of embedding variances for each dominant register"""
+    """Plot comparison of embedding variances for each register"""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
-    # Only plot main registers that appear in both document and segment level
+    # Only plot registers that appear in both document and segment level
     mask = (doc_results["counts"] > 0) & (seg_results["counts"] > 0)
-    mask = mask[:9]  # Only consider main categories
-    register_indices = np.arange(9)[mask]  # Only main categories
-    doc_var = doc_results["variances"][:9][mask]
-    seg_var = seg_results["variances"][:9][mask]
+    register_indices = np.arange(len(doc_results["variances"]))[mask]
+    doc_var = doc_results["variances"][mask]
+    seg_var = seg_results["variances"][mask]
     register_names = [REGISTER_NAMES[i] for i in register_indices]
 
     # Plot 1: Variance comparison
@@ -210,7 +132,6 @@ def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
     ax1.legend()
 
     # Plot 2: Variance reduction
-    # Add check for zero variance
     variance_reduction = np.zeros_like(doc_var)
     nonzero_mask = doc_var > 0
     variance_reduction[nonzero_mask] = (
@@ -241,10 +162,9 @@ def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int =
         data["document_embeddings"], data["document_registers"]
     )
     seg_results = compute_register_variances(
-        data["segment_embeddings"], data["segment_registers"], is_segment=True
+        data["segment_embeddings"], data["segment_registers"]
     )
 
-    # Print summary statistics
     print("\nResults Summary:")
     print(
         f"{'Register':>8} {'Doc Count':>10} {'Seg Count':>10} {'Doc Var':>10} {'Seg Var':>10} {'% Reduction':>12}"
@@ -254,24 +174,21 @@ def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int =
     total_reduction = 0
     valid_registers = 0
 
-    # Only process main categories (first 9 registers)
-    for reg_idx in range(9):
+    for reg_idx in range(len(doc_results["variances"])):
         doc_count = doc_results["counts"][reg_idx]
         seg_count = seg_results["counts"][reg_idx]
 
         if doc_count > 0 and seg_count > 0:
             doc_var = doc_results["variances"][reg_idx]
             seg_var = seg_results["variances"][reg_idx]
+            # Add check for zero variance
             reduction = 0 if doc_var <= 0 else (doc_var - seg_var) / doc_var * 100
             reg_name = REGISTER_NAMES[reg_idx]
             print(
                 f"{reg_name:>8} {doc_count:>10} {seg_count:>10} {doc_var:>10.3f} {seg_var:>10.3f} {reduction:>11.1f}%"
             )
-            if (
-                doc_var > 0
-            ):  # Only include in average if variance reduction is meaningful
-                total_reduction += reduction
-                valid_registers += 1
+            total_reduction += reduction
+            valid_registers += 1
 
     # Add average reduction score
     print("-" * 65)

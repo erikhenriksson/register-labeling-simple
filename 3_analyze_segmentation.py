@@ -53,6 +53,10 @@ def collect_data(
     segment_embeddings = []
     segment_registers = []
 
+    # Add counters for debugging
+    total_segments = 0
+    segments_per_doc = []
+
     with open(input_jsonl_path, "r") as f:
         for i, line in enumerate(f):
             if i >= limit:
@@ -67,6 +71,11 @@ def collect_data(
             document_embeddings.append(data["embedding"])
             document_registers.append(doc_reg)
 
+            # Count segments in this document
+            num_segments = len(data["segmentation"]["embeddings"])
+            segments_per_doc.append(num_segments)
+            total_segments += num_segments
+
             # Process segment level
             for emb, probs in zip(
                 data["segmentation"]["embeddings"],
@@ -76,9 +85,22 @@ def collect_data(
                 segment_embeddings.append(emb)
                 segment_registers.append(seg_reg)
 
+    # Print diagnostic information
+    print(f"\nDiagnostic Information:")
+    print(f"Total documents processed: {len(document_embeddings)}")
+    print(f"Total segments found: {total_segments}")
+    print(f"Average segments per document: {np.mean(segments_per_doc):.2f}")
     print(
-        f"Processed {len(document_embeddings)} documents and {len(segment_embeddings)} segments"
+        f"Min/Max segments per document: {min(segments_per_doc)}/{max(segments_per_doc)}"
     )
+
+    # Print register distribution
+    doc_reg_dist = np.sum(np.array(document_registers), axis=0)
+    seg_reg_dist = np.sum(np.array(segment_registers), axis=0)
+    print("\nRegister distribution (doc level vs segment level):")
+    for i, reg in enumerate(REGISTER_NAMES):
+        print(f"{reg:>4}: {doc_reg_dist[i]:>4} docs, {seg_reg_dist[i]:>4} segments")
+
     return {
         "document_embeddings": np.array(document_embeddings),
         "document_registers": np.array(document_registers),

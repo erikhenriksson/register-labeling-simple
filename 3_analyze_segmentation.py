@@ -183,13 +183,24 @@ def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int =
         if doc_count > 0 and seg_count > 0:
             doc_var = doc_results["variances"][reg_idx]
             seg_var = seg_results["variances"][reg_idx]
-            reduction = (doc_var - seg_var) / doc_var * 100 if doc_var > 0 else 0
+
+            # Check if doc_var is zero or very close to zero
+            if (
+                doc_var < 1e-10
+            ):  # Using small epsilon to handle floating point precision
+                reduction = 0
+            else:
+                reduction = (doc_var - seg_var) / doc_var * 100
+
             reg_name = REGISTER_NAMES[reg_idx]
             print(
                 f"{reg_name:>8} {doc_count:>10} {seg_count:>10} {doc_var:>10.3f} {seg_var:>10.3f} {reduction:>11.1f}%"
             )
-            total_reduction += reduction
-            valid_registers += 1
+
+            # Only include non-zero variance cases in the average
+            if doc_var >= 1e-10:
+                total_reduction += reduction
+                valid_registers += 1
 
     # Add average reduction score
     print("-" * 65)

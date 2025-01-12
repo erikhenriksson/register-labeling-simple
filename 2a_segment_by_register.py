@@ -57,6 +57,23 @@ class RegisterSegmenter:
         # Create label to index mapping
         self.label_to_idx = {label: idx for idx, label in self.id2label.items()}
 
+    def compute_entropy(self, probs: np.ndarray) -> float:
+        """
+        Compute entropy for multilabel probabilities.
+        For each label position, we have a binary probability (p, 1-p).
+        Total entropy is the sum of entropies across all label positions.
+        """
+        eps = 1e-10  # Small constant to avoid log(0)
+
+        # Clip probabilities to avoid numerical issues
+        probs = np.clip(probs, eps, 1.0 - eps)
+
+        # For each label position, compute binary entropy: -p*log(p) - (1-p)*log(1-p)
+        binary_entropies = -(probs * np.log(probs) + (1 - probs) * np.log(1 - probs))
+
+        # Sum across all label positions
+        return float(np.sum(binary_entropies))
+
     def adjust_probs_for_hierarchy(self, probs: np.ndarray) -> np.ndarray:
         """
         Adjust probabilities to enforce hierarchical consistency:
@@ -159,25 +176,12 @@ class RegisterSegmenter:
 
         return valid_segmentations
 
-    def compute_entropy(self, probs: np.ndarray) -> float:
-        """
-        Compute entropy for multilabel probabilities.
-        For each label position, we have a binary probability (p, 1-p).
-        Total entropy is the sum of entropies across all label positions.
-        """
-        eps = 1e-10  # Small constant to avoid log(0)
-
-        # Clip probabilities to avoid numerical issues
-        probs = np.clip(probs, eps, 1.0 - eps)
-
-        # For each label position, compute binary entropy: -p*log(p) - (1-p)*log(1-p)
-        binary_entropies = -(probs * np.log(probs) + (1 - probs) * np.log(1 - probs))
-
-        # Sum across all label positions
-        return float(np.sum(binary_entropies))
-
     def evaluate_split(
-        self, original_registers: Set[str], segment1: Segment, segment2: Segment
+        self,
+        original_registers: Set[str],
+        original_probs: np.ndarray,
+        segment1: Segment,
+        segment2: Segment,
     ) -> float:
         """
         Evaluate split and return score (entropy reduction).
@@ -207,6 +211,7 @@ class RegisterSegmenter:
 
     def segment_recursively(self, text: str) -> List[Segment]:
         """Recursively segment text based on register consistency"""
+        # Split into sentences
         sentences = self.split_to_sentences(text)
         if len(sentences) < 2 or len(text) < self.min_segment_length * 2:
             probs = self.predict_registers(text)
@@ -219,9 +224,11 @@ class RegisterSegmenter:
                 )
             ]
 
+        # Get original registers from complete text
         original_probs = self.predict_registers(text)
         original_registers = self.get_dominant_registers(original_probs)
 
+        # Get all valid segmentations
         valid_segmentations = self.get_valid_segmentations(sentences)
         if not valid_segmentations:
             return [
@@ -238,7 +245,7 @@ class RegisterSegmenter:
         best_segmentation = None
 
         for seg1, seg2 in valid_segmentations:
-            score = self.evaluate_split(original_registers, seg1, seg2)
+            score = self.evaluate_split(original_registers, original_probs, seg1, seg2)
             if score > best_score:
                 best_score = score
                 best_segmentation = (seg1, seg2)

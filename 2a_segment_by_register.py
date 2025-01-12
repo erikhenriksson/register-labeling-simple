@@ -161,36 +161,35 @@ class RegisterSegmenter:
 
     def evaluate_split(
         self, original_registers: Set[str], segment1: Segment, segment2: Segment
-    ) -> bool:
+    ) -> float:
         """
-        Evaluate if a split is beneficial based on register consistency.
-        Returns True if split is beneficial, False otherwise.
+        Evaluate split and return score (entropy reduction).
+        Returns negative infinity for invalid splits.
         """
-        # Get dominant registers for each segment
         registers1 = self.get_dominant_registers(np.array(segment1.register_probs))
         registers2 = self.get_dominant_registers(np.array(segment2.register_probs))
 
-        # Split is beneficial if:
-        # 1. At least one segment has a dominant register
-        # 2. The registers are different between segments
-        # 3. All original registers are preserved in at least one segment
+        # Basic validity checks
         if not (registers1 or registers2):  # At least one must have a register
-            return False
+            return float("-inf")
 
-        # Check if the registers are different
         if registers1 == registers2:
-            return False
+            return float("-inf")
 
         # Check if all original registers are preserved
         preserved_registers = registers1.union(registers2)
         if not original_registers.issubset(preserved_registers):
-            return False
+            return float("-inf")
 
-        return True
+        # Calculate entropy reduction
+        entropy1 = self.compute_entropy(np.array(segment1.register_probs))
+        entropy2 = self.compute_entropy(np.array(segment2.register_probs))
+        avg_entropy = (entropy1 + entropy2) / 2
+
+        return self.compute_entropy(original_probs) - avg_entropy
 
     def segment_recursively(self, text: str) -> List[Segment]:
         """Recursively segment text based on register consistency"""
-        # Split into sentences
         sentences = self.split_to_sentences(text)
         if len(sentences) < 2 or len(text) < self.min_segment_length * 2:
             probs = self.predict_registers(text)
@@ -203,11 +202,9 @@ class RegisterSegmenter:
                 )
             ]
 
-        # Get original registers from complete text
         original_probs = self.predict_registers(text)
         original_registers = self.get_dominant_registers(original_probs)
 
-        # Get all valid segmentations
         valid_segmentations = self.get_valid_segmentations(sentences)
         if not valid_segmentations:
             return [
@@ -219,40 +216,33 @@ class RegisterSegmenter:
                 )
             ]
 
-        # Find best segmentation that improves register consistency
+        # Find best segmentation by entropy reduction
+        best_score = float("-inf")
+        best_segmentation = None
+
         for seg1, seg2 in valid_segmentations:
-            if self.evaluate_split(original_registers, seg1, seg2):
-                # Get registers for each segment before recursing
-                seg1_registers = self.get_dominant_registers(
-                    np.array(seg1.register_probs)
-                )
-                seg2_registers = self.get_dominant_registers(
-                    np.array(seg2.register_probs)
-                )
-
-                # Recursively segment each part, passing down their respective registers
-                final_segments = []
-                if seg1_registers:  # Only recurse if there are registers to preserve
-                    final_segments.extend(self.segment_recursively(seg1.text))
-                else:
-                    final_segments.append(seg1)
-
-                if seg2_registers:  # Only recurse if there are registers to preserve
-                    final_segments.extend(self.segment_recursively(seg2.text))
-                else:
-                    final_segments.append(seg2)
-
-                return final_segments
+            score = self.evaluate_split(original_registers, seg1, seg2)
+            if score > best_score:
+                best_score = score
+                best_segmentation = (seg1, seg2)
 
         # If no beneficial split found, return original segment
-        return [
-            Segment(
-                text=text,
-                start_idx=0,
-                end_idx=len(sentences),
-                register_probs=original_probs.tolist(),
-            )
-        ]
+        if best_score <= 0 or best_segmentation is None:
+            return [
+                Segment(
+                    text=text,
+                    start_idx=0,
+                    end_idx=len(sentences),
+                    register_probs=original_probs.tolist(),
+                )
+            ]
+
+        # Recursively segment best split
+        final_segments = []
+        seg1, seg2 = best_segmentation
+        final_segments.extend(self.segment_recursively(seg1.text))
+        final_segments.extend(self.segment_recursively(seg2.text))
+        return final_segments
 
 
 def get_register_labels(

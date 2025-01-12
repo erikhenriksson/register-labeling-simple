@@ -3,6 +3,35 @@ import numpy as np
 from typing import Dict
 import matplotlib.pyplot as plt
 
+# Register names mapping
+REGISTER_NAMES = [
+    "MT",
+    "LY",
+    "SP",
+    "ID",
+    "NA",
+    "HI",
+    "IN",
+    "OP",
+    "IP",  # Main categories
+    "it",  # SP (Spoken)
+    "ne",
+    "sr",
+    "nb",  # NA (Narrative)
+    "re",  # HI (How-to/Instructional)
+    "en",
+    "ra",
+    "dtp",
+    "fi",
+    "lt",  # IN (Informational)
+    "rv",
+    "ob",
+    "rs",
+    "av",  # OP (Opinion)
+    "ds",
+    "ed",  # IP (Interactive/Interpersonal)
+]
+
 
 def convert_to_dominant_registers(
     probabilities: np.ndarray, threshold: float = 0.5
@@ -93,26 +122,32 @@ def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
 
     # Only plot registers that appear in both document and segment level
     mask = (doc_results["counts"] > 0) & (seg_results["counts"] > 0)
-    register_x = np.arange(len(doc_results["variances"]))[mask]
+    register_indices = np.arange(len(doc_results["variances"]))[mask]
     doc_var = doc_results["variances"][mask]
     seg_var = seg_results["variances"][mask]
+    register_names = [REGISTER_NAMES[i] for i in register_indices]
 
     # Plot 1: Variance comparison
-    ax1.bar(register_x - 0.2, doc_var, 0.4, label="Document Level")
-    ax1.bar(register_x + 0.2, seg_var, 0.4, label="Segment Level")
-    ax1.set_xlabel("Register Index")
+    x = np.arange(len(register_names))
+    ax1.bar(x - 0.2, doc_var, 0.4, label="Document Level")
+    ax1.bar(x + 0.2, seg_var, 0.4, label="Segment Level")
+    ax1.set_xlabel("Register")
     ax1.set_ylabel("Average Embedding Variance")
     ax1.set_title("Embedding Variance by Register")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(register_names, rotation=45, ha="right")
     ax1.legend()
 
     # Plot 2: Variance reduction
     variance_reduction = (doc_var - seg_var) / doc_var * 100
     colors = ["green" if x > 0 else "red" for x in variance_reduction]
-    ax2.bar(register_x, variance_reduction, color=colors)
+    ax2.bar(x, variance_reduction, color=colors)
     ax2.axhline(y=0, color="black", linestyle="-", linewidth=0.5)
-    ax2.set_xlabel("Register Index")
+    ax2.set_xlabel("Register")
     ax2.set_ylabel("Variance Reduction (%)")
     ax2.set_title("Reduction in Variance with Segmentation")
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(register_names, rotation=45, ha="right")
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -147,8 +182,9 @@ def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int =
             doc_var = doc_results["variances"][reg_idx]
             seg_var = seg_results["variances"][reg_idx]
             reduction = (doc_var - seg_var) / doc_var * 100 if doc_var > 0 else 0
+            reg_name = REGISTER_NAMES[reg_idx]
             print(
-                f"{reg_idx:>8} {doc_count:>10} {seg_count:>10} {doc_var:>10.3f} {seg_var:>10.3f} {reduction:>11.1f}%"
+                f"{reg_name:>8} {doc_count:>10} {seg_count:>10} {doc_var:>10.3f} {seg_var:>10.3f} {reduction:>11.1f}%"
             )
 
     # Create and save plot

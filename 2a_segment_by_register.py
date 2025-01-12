@@ -163,43 +163,21 @@ class RegisterSegmenter:
         self, original_registers: Set[str], segment1: Segment, segment2: Segment
     ) -> bool:
         """
-        Evaluate if a split is beneficial based on register purity.
-        Returns True if split creates purer register segments.
+        Evaluate if a split is beneficial based on register consistency.
+        Returns True if split is beneficial, False otherwise.
         """
-        # Get register probabilities as numpy arrays
-        probs1 = np.array(segment1.register_probs)
-        probs2 = np.array(segment2.register_probs)
-
         # Get dominant registers for each segment
-        registers1 = self.get_dominant_registers(probs1)
-        registers2 = self.get_dominant_registers(probs2)
+        registers1 = self.get_dominant_registers(np.array(segment1.register_probs))
+        registers2 = self.get_dominant_registers(np.array(segment2.register_probs))
 
-        # Basic validity checks
-        if not (registers1 and registers2):  # Both must have at least one register
+        # Split is beneficial if:
+        # 1. At least one segment has a dominant register
+        # 2. The registers are different between segments
+        if not (registers1 or registers2):  # At least one must have a register
             return False
 
-        if registers1 == registers2:  # Must have different register compositions
-            return False
-
-        # Calculate "purity" scores
-        # For each segment, take the max probability among its dominant registers
-        def get_purity_score(probs, registers):
-            if not registers:
-                return 0.0
-            register_indices = [self.label_to_idx[reg] for reg in registers]
-            return float(np.max(probs[register_indices]))
-
-        purity1 = get_purity_score(probs1, registers1)
-        purity2 = get_purity_score(probs2, registers2)
-
-        # Calculate original purity
-        orig_probs = np.array(
-            segment1.register_probs
-        )  # Use either segment's original probs
-        orig_purity = get_purity_score(orig_probs, original_registers)
-
-        # Split is beneficial if average purity of segments is higher than original
-        return (purity1 + purity2) / 2 > orig_purity
+        # Check if there's meaningful register difference between segments
+        return registers1 != registers2
 
     def segment_recursively(self, text: str) -> List[Segment]:
         """Recursively segment text based on register consistency"""

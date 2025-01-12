@@ -63,7 +63,7 @@ def collect_data(
 def analyze_register_variance(
     embeddings: np.ndarray, registers: np.ndarray, n_components: int = 10
 ) -> Dict[str, np.ndarray]:
-    """Analyze how each register explains variance in embeddings"""
+    """Analyze how each register individually explains variance in the embeddings"""
     pca = PCA(n_components=n_components)
     reduced_emb = pca.fit_transform(embeddings)
 
@@ -73,14 +73,13 @@ def analyze_register_variance(
         "total_variance_explained": np.sum(pca.explained_variance_ratio_),
     }
 
-    # Analyze each register separately
+    # Analyze each register individually
     n_registers = registers.shape[1]
     register_r2_by_component = np.zeros((n_registers, n_components))
 
     for reg_idx in range(n_registers):
         for pc in range(n_components):
             reg = LinearRegression()
-            # Use single register as predictor
             reg.fit(registers[:, reg_idx : reg_idx + 1], reduced_emb[:, pc])
             register_r2_by_component[reg_idx, pc] = reg.score(
                 registers[:, reg_idx : reg_idx + 1], reduced_emb[:, pc]
@@ -93,60 +92,31 @@ def analyze_register_variance(
 
 
 def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
-    """Plot enhanced comparison including per-register analysis"""
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+    """Plot comparison of how each dominant register explains variance"""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
-    x = np.arange(len(doc_results["explained_variance_ratio"]))
-
-    # Plot 1: Explained variance
-    ax1.plot(
-        x,
-        np.cumsum(doc_results["explained_variance_ratio"]),
-        label="Document Level",
-        marker="o",
-    )
-    ax1.plot(
-        x,
-        np.cumsum(seg_results["explained_variance_ratio"]),
-        label="Segment Level",
-        marker="o",
-    )
-    ax1.set_xlabel("Number of Components")
-    ax1.set_ylabel("Cumulative Explained Variance Ratio")
-    ax1.set_title("PCA Explained Variance")
-    ax1.legend()
-
-    # Plot 2: Average R² by register
+    # Plot 1: Average R² by register (bar plot comparison)
     n_registers = len(doc_results["avg_r2_by_register"])
     register_x = np.arange(n_registers)
-    ax2.bar(
+    ax1.bar(
         register_x - 0.2, doc_results["avg_r2_by_register"], 0.4, label="Document Level"
     )
-    ax2.bar(
+    ax1.bar(
         register_x + 0.2, seg_results["avg_r2_by_register"], 0.4, label="Segment Level"
     )
+    ax1.set_xlabel("Register Index")
+    ax1.set_ylabel("Average R² across PCs")
+    ax1.set_title("Register Explanatory Power")
+    ax1.legend()
+
+    # Plot 2: R² difference (segment - document) to show improvement
+    r2_diff = seg_results["avg_r2_by_register"] - doc_results["avg_r2_by_register"]
+    colors = ["green" if x > 0 else "red" for x in r2_diff]
+    ax2.bar(register_x, r2_diff, color=colors)
+    ax2.axhline(y=0, color="black", linestyle="-", linewidth=0.5)
     ax2.set_xlabel("Register Index")
-    ax2.set_ylabel("Average R² across PCs")
-    ax2.set_title("Register Predictive Power")
-    ax2.legend()
-
-    # Plot 3: Document-level register R² by component
-    im3 = ax3.imshow(
-        doc_results["register_r2_by_component"], aspect="auto", cmap="YlOrRd"
-    )
-    ax3.set_xlabel("Principal Component")
-    ax3.set_ylabel("Register Index")
-    ax3.set_title("Document Level: R² by Register and PC")
-    plt.colorbar(im3, ax=ax3)
-
-    # Plot 4: Segment-level register R² by component
-    im4 = ax4.imshow(
-        seg_results["register_r2_by_component"], aspect="auto", cmap="YlOrRd"
-    )
-    ax4.set_xlabel("Principal Component")
-    ax4.set_ylabel("Register Index")
-    ax4.set_title("Segment Level: R² by Register and PC")
-    plt.colorbar(im4, ax=ax4)
+    ax2.set_ylabel("R² Difference (Segment - Document)")
+    ax2.set_title("Improvement in Register Explanatory Power\nwith Segmentation")
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -176,21 +146,14 @@ def main(
 
     # Print summary statistics
     print("\nResults Summary:")
-    print(f"Document Level:")
-    print(
-        f"- Total variance explained by {n_components} PCs: {doc_results['total_variance_explained']:.3f}"
-    )
-    print("\nRegister-wise R² averages:")
-    for reg_idx, r2 in enumerate(doc_results["avg_r2_by_register"]):
-        print(f"Register {reg_idx}: {r2:.3f}")
-
-    print(f"\nSegment Level:")
-    print(
-        f"- Total variance explained by {n_components} PCs: {seg_results['total_variance_explained']:.3f}"
-    )
-    print("\nRegister-wise R² averages:")
-    for reg_idx, r2 in enumerate(seg_results["avg_r2_by_register"]):
-        print(f"Register {reg_idx}: {r2:.3f}")
+    print(f"\nRegister-wise R² values (averaged across PCs):")
+    print(f"{'Register':>8} {'Document':>10} {'Segment':>10} {'Difference':>12}")
+    print("-" * 42)
+    for reg_idx in range(len(doc_results["avg_r2_by_register"])):
+        doc_r2 = doc_results["avg_r2_by_register"][reg_idx]
+        seg_r2 = seg_results["avg_r2_by_register"][reg_idx]
+        diff = seg_r2 - doc_r2
+        print(f"{reg_idx:>8} {doc_r2:>10.3f} {seg_r2:>10.3f} {diff:>12.3f}")
 
     # Create and save plot
     plot_results(doc_results, seg_results, output_path)

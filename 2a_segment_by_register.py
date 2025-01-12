@@ -173,7 +173,7 @@ class RegisterSegmenter:
         # Split is beneficial if:
         # 1. At least one segment has a dominant register
         # 2. The registers are different between segments
-        if not (registers1 or registers2):  # At least one must have a register
+        if not (registers1 and registers2):  # At least one must have a register
             return False
 
         # Check if there's meaningful register difference between segments

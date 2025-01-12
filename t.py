@@ -1,170 +1,215 @@
 import json
-from collections import Counter
-from typing import Dict, List, Set
-import argparse
+import numpy as np
+from typing import Dict
+import matplotlib.pyplot as plt
+
+# Register names mapping
+REGISTER_NAMES = [
+    "MT",
+    "LY",
+    "SP",
+    "ID",
+    "NA",
+    "HI",
+    "IN",
+    "OP",
+    "IP",  # Main categories
+    "it",  # SP (Spoken)
+    "ne",
+    "sr",
+    "nb",  # NA (Narrative)
+    "re",  # HI (How-to/Instructional)
+    "en",
+    "ra",
+    "dtp",
+    "fi",
+    "lt",  # IN (Informational)
+    "rv",
+    "ob",
+    "rs",
+    "av",  # OP (Opinion)
+    "ds",
+    "ed",  # IP (Interactive/Interpersonal)
+]
 
 
-def setup_label_structure() -> tuple:
-    # Define the label structure
-    labels_structure = {
-        "MT": [],
-        "LY": [],
-        "SP": ["it"],
-        "ID": [],
-        "NA": ["ne", "sr", "nb"],
-        "HI": ["re"],
-        "IN": ["en", "ra", "dtp", "fi", "lt"],
-        "OP": ["rv", "ob", "rs", "av"],
-        "IP": ["ds", "ed"],
+def convert_to_threshold_registers(
+    probabilities: np.ndarray, threshold: float = 0.5
+) -> np.ndarray:
+    """Convert probabilities to binary labels for all registers over threshold"""
+    return (probabilities >= threshold).astype(int)
+
+
+def collect_data(
+    input_jsonl_path: str, threshold: float = 0.5, limit: int = 100
+) -> Dict[str, np.ndarray]:
+    """Collect document and segment level data with thresholded register labeling"""
+    document_embeddings = []
+    document_registers = []
+    segment_embeddings = []
+    segment_registers = []
+
+    with open(input_jsonl_path, "r") as f:
+        for i, line in enumerate(f):
+            if i >= limit:
+                break
+
+            data = json.loads(line)
+
+            # Process document level
+            doc_reg = convert_to_threshold_registers(
+                np.array(data["register_probabilities"]), threshold
+            )
+            document_embeddings.append(data["embedding"])
+            document_registers.append(doc_reg)
+
+            # Process segment level
+            for emb, probs in zip(
+                data["segmentation"]["embeddings"],
+                data["segmentation"]["register_probabilities"],
+            ):
+                seg_reg = convert_to_threshold_registers(np.array(probs), threshold)
+                segment_embeddings.append(emb)
+                segment_registers.append(seg_reg)
+
+    print(
+        f"Processed {len(document_embeddings)} documents and {len(segment_embeddings)} segments"
+    )
+    return {
+        "document_embeddings": np.array(document_embeddings),
+        "document_registers": np.array(document_registers),
+        "segment_embeddings": np.array(segment_embeddings),
+        "segment_registers": np.array(segment_registers),
     }
 
-    # Create flat list of labels
-    labels_list = [k for k in labels_structure.keys()] + [
-        item for row in labels_structure.values() for item in row
-    ]
 
-    # Create mapping of child labels to their parents
-    child_to_parent = {}
-    for parent, children in labels_structure.items():
-        for child in children:
-            child_to_parent[child] = parent
+def compute_register_variances(
+    embeddings: np.ndarray, registers: np.ndarray
+) -> Dict[str, np.ndarray]:
+    """Compute embedding variance for each register above threshold"""
+    n_registers = registers.shape[1]
+    register_variances = []
+    register_counts = []
 
-    return labels_structure, labels_list, child_to_parent
+    for reg_idx in range(n_registers):
+        # Get embeddings where this register is above threshold
+        mask = registers[:, reg_idx] == 1
+        if np.sum(mask) > 0:  # If we have any instances of this register
+            reg_embeddings = embeddings[mask]
+            # Compute variance across all embedding dimensions
+            variance = np.mean(np.var(reg_embeddings, axis=0))
+            count = np.sum(mask)
+        else:
+            variance = 0
+            count = 0
 
+        register_variances.append(variance)
+        register_counts.append(count)
 
-def process_probabilities(
-    probs: List[float],
-    labels_list: List[str],
-    child_to_parent: Dict[str, str],
-    threshold: float = 0.4,
-    parent_only: bool = False,
-) -> Set[str]:
-    """
-    Process probability list and return labels that pass threshold,
-    zeroing out parent categories when children pass threshold.
-    """
-    # Create dictionary of label:probability pairs
-    label_probs = dict(zip(labels_list, probs))
-
-    # First pass: identify which children pass threshold
-    children_passed = {}
-    for label, prob in label_probs.items():
-        if label in child_to_parent and prob >= threshold:
-            parent = child_to_parent[label]
-            if parent not in children_passed:
-                children_passed[parent] = []
-            children_passed[parent].append(label)
-
-    # Second pass: zero out parents where children passed threshold
-    for parent in children_passed.keys():
-        label_probs[parent] = 0
-
-    # Get final labels that pass threshold
-    final_labels = {label for label, prob in label_probs.items() if prob >= threshold}
-
-    # If parent_only mode is enabled, convert all labels to their parent categories
-    if parent_only:
-        final_labels = {child_to_parent.get(label, label) for label in final_labels}
-
-    return final_labels
+    return {
+        "variances": np.array(register_variances),
+        "counts": np.array(register_counts),
+    }
 
 
-def process_jsonl_file(file_path: str, parent_only: bool = False) -> tuple:
-    """
-    Process entire JSONL file and return label frequencies and percentages.
-    """
-    # Setup label structure
-    labels_structure, labels_list, child_to_parent = setup_label_structure()
+def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
+    """Plot comparison of embedding variances for each register"""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
-    # Process file
-    label_counter = Counter()
-    total_records = 0
-    hybrid_count = 0
-    nonhybrid_count = 0  # includes both single-label and none
-    with open(file_path, "r") as f:
-        for line in f:
-            total_records += 1
-            data = json.loads(line)
-            probs = data["register_probabilities"]
+    # Only plot registers that appear in both document and segment level
+    mask = (doc_results["counts"] > 0) & (seg_results["counts"] > 0)
+    register_indices = np.arange(len(doc_results["variances"]))[mask]
+    doc_var = doc_results["variances"][mask]
+    seg_var = seg_results["variances"][mask]
+    register_names = [REGISTER_NAMES[i] for i in register_indices]
 
-            # Get labels for this record
-            record_labels = process_probabilities(
-                probs, labels_list, child_to_parent, parent_only=parent_only
+    # Sort by variance reduction for better visualization
+    variance_reduction = (doc_var - seg_var) / doc_var * 100
+    sort_idx = np.argsort(variance_reduction)
+    register_names = [register_names[i] for i in sort_idx]
+    doc_var = doc_var[sort_idx]
+    seg_var = seg_var[sort_idx]
+    variance_reduction = variance_reduction[sort_idx]
+
+    # Plot 1: Variance comparison
+    x = np.arange(len(register_names))
+    ax1.bar(x - 0.2, doc_var, 0.4, label="Document Level")
+    ax1.bar(x + 0.2, seg_var, 0.4, label="Segment Level")
+    ax1.set_xlabel("Register")
+    ax1.set_ylabel("Average Embedding Variance")
+    ax1.set_title("Embedding Variance by Register")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(register_names, rotation=45, ha="right")
+    ax1.legend()
+
+    # Plot 2: Variance reduction
+    colors = ["green" if x > 0 else "red" for x in variance_reduction]
+    ax2.bar(x, variance_reduction, color=colors)
+    ax2.axhline(y=0, color="black", linestyle="-", linewidth=0.5)
+    ax2.set_xlabel("Register")
+    ax2.set_ylabel("Variance Reduction (%)")
+    ax2.set_title("Reduction in Variance with Segmentation")
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(register_names, rotation=45, ha="right")
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int = 100):
+    """Main analysis pipeline"""
+    print("Loading and processing data...")
+    data = collect_data(input_path, threshold, limit)
+
+    print("\nComputing variances...")
+    doc_results = compute_register_variances(
+        data["document_embeddings"], data["document_registers"]
+    )
+    seg_results = compute_register_variances(
+        data["segment_embeddings"], data["segment_registers"]
+    )
+
+    # Print summary statistics
+    print("\nResults Summary:")
+    print(
+        f"{'Register':>8} {'Doc Count':>10} {'Seg Count':>10} {'Doc Var':>10} {'Seg Var':>10} {'% Reduction':>12}"
+    )
+    print("-" * 65)
+
+    for reg_idx in range(len(doc_results["variances"])):
+        doc_count = doc_results["counts"][reg_idx]
+        seg_count = seg_results["counts"][reg_idx]
+
+        if doc_count > 0 and seg_count > 0:
+            doc_var = doc_results["variances"][reg_idx]
+            seg_var = seg_results["variances"][reg_idx]
+            reduction = (doc_var - seg_var) / doc_var * 100 if doc_var > 0 else 0
+            reg_name = REGISTER_NAMES[reg_idx]
+            print(
+                f"{reg_name:>8} {doc_count:>10} {seg_count:>10} {doc_var:>10.3f} {seg_var:>10.3f} {reduction:>11.1f}%"
             )
 
-            # Count hybrids vs non-hybrids
-            if len(record_labels) > 1:
-                hybrid_count += 1
-                label_counter["+".join(sorted(record_labels))] += 1
-            elif len(record_labels) == 1:
-                nonhybrid_count += 1
-                label_counter[next(iter(record_labels))] += 1
-            else:
-                nonhybrid_count += 1
-                label_counter["none"] += 1
-
-    # Calculate percentages
-    label_percentages = {
-        label: (count / total_records) * 100 for label, count in label_counter.items()
-    }
-
-    return (
-        dict(label_counter),
-        label_percentages,
-        total_records,
-        hybrid_count,
-        nonhybrid_count,
-    )
+    # Create and save plot
+    plot_results(doc_results, seg_results, output_path)
+    print(f"\nPlot saved to: {output_path}")
 
 
 if __name__ == "__main__":
-    # Setup command line argument parsing
-    parser = argparse.ArgumentParser(
-        description="Process JSONL file for label analysis."
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input_file", help="Path to segmentation output JSONL")
+    parser.add_argument("output_file", help="Path to save the plot (PNG)")
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="Threshold for register probabilities",
     )
-    parser.add_argument("file_path", help="Path to the JSONL file")
+    parser.add_argument(
+        "--limit", type=int, default=100, help="Maximum number of documents to process"
+    )
     args = parser.parse_args()
 
-    # Process the file - detailed analysis
-    frequencies, percentages, total, hybrid_count, nonhybrid_count = process_jsonl_file(
-        args.file_path, parent_only=False
-    )
-
-    # Print detailed analysis
-    print("\n=== DETAILED ANALYSIS (All Labels) ===")
-    print(f"Processed {total} records")
-    print(f"Hybrid combinations: {hybrid_count} ({(hybrid_count/total)*100:.2f}%)")
-    print(f"Non-hybrid cases: {nonhybrid_count} ({(nonhybrid_count/total)*100:.2f}%)")
-
-    print("\nDetailed Label Frequencies (sorted by frequency):")
-    print("-" * 50)
-    sorted_items = sorted(frequencies.items(), key=lambda x: (-x[1], x[0]))
-    for label, count in sorted_items:
-        print(f"{label}: {count} ({percentages[label]:.2f}%)")
-
-    # Process the file - parent categories only
-    (
-        parent_frequencies,
-        parent_percentages,
-        parent_total,
-        parent_hybrid_count,
-        parent_nonhybrid_count,
-    ) = process_jsonl_file(args.file_path, parent_only=True)
-
-    # Print parent-level analysis
-    print("\n\n=== PARENT CATEGORY ANALYSIS ===")
-    print(f"Processed {parent_total} records")
-    print(
-        f"Hybrid combinations: {parent_hybrid_count} ({(parent_hybrid_count/parent_total)*100:.2f}%)"
-    )
-    print(
-        f"Non-hybrid cases: {parent_nonhybrid_count} ({(parent_nonhybrid_count/parent_total)*100:.2f}%)"
-    )
-
-    print("\nParent Category Frequencies (sorted by frequency):")
-    print("-" * 50)
-    parent_sorted_items = sorted(
-        parent_frequencies.items(), key=lambda x: (-x[1], x[0])
-    )
-    for label, count in parent_sorted_items:
-        print(f"{label}: {count} ({parent_percentages[label]:.2f}%)")
+    main(args.input_file, args.output_file, args.threshold, args.limit)

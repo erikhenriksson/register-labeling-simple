@@ -167,12 +167,14 @@ def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int =
         data["segment_embeddings"], data["segment_registers"]
     )
 
-    # Print summary statistics
     print("\nResults Summary:")
     print(
         f"{'Register':>8} {'Doc Count':>10} {'Seg Count':>10} {'Doc Var':>10} {'Seg Var':>10} {'% Reduction':>12}"
     )
     print("-" * 65)
+
+    total_reduction = 0
+    valid_registers = 0
 
     for reg_idx in range(len(doc_results["variances"])):
         doc_count = doc_results["counts"][reg_idx]
@@ -186,6 +188,15 @@ def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int =
             print(
                 f"{reg_name:>8} {doc_count:>10} {seg_count:>10} {doc_var:>10.3f} {seg_var:>10.3f} {reduction:>11.1f}%"
             )
+            total_reduction += reduction
+            valid_registers += 1
+
+    # Add average reduction score
+    print("-" * 65)
+    avg_reduction = total_reduction / valid_registers if valid_registers > 0 else 0
+    print(
+        f"{'Average':>8} {'-':>10} {'-':>10} {'-':>10} {'-':>10} {avg_reduction:>11.1f}%"
+    )
 
     # Create and save plot
     plot_results(doc_results, seg_results, output_path)

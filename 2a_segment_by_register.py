@@ -14,6 +14,7 @@ class Segment:
     start_idx: int
     end_idx: int
     register_probs: List[float]
+    embedding: Optional[List[float]] = None
 
 
 class RegisterSegmenter:
@@ -33,6 +34,7 @@ class RegisterSegmenter:
         self.tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-large")
         self.model = self.model.to(self.device)
         self.model.eval()
+        self.model.config.output_hidden_states = True  # Enable hidden states output
         self.id2label = self.model.config.id2label
 
         # Set up hierarchical label structure
@@ -56,6 +58,38 @@ class RegisterSegmenter:
 
         # Create label to index mapping
         self.label_to_idx = {label: idx for idx, label in self.id2label.items()}
+
+    def predict_embeddings(self, text: str) -> np.ndarray:
+        """Predict embeddings for a text segment"""
+        with torch.no_grad():
+            inputs = self.tokenizer(
+                text,
+                padding=True,
+                truncation=True,
+                max_length=2048,
+                return_tensors="pt",
+            ).to(self.device)
+            outputs = self.model(**inputs)
+            # Get embeddings from the last hidden state's [CLS] token
+            embeddings = outputs.hidden_states[-1][:, 0, :].cpu().numpy()
+            return embeddings[0]  # Return the first (only) embedding
+
+    def predict_registers_and_embeddings(
+        self, text: str
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Predict both register probabilities and embeddings for a text segment"""
+        with torch.no_grad():
+            inputs = self.tokenizer(
+                text,
+                padding=True,
+                truncation=True,
+                max_length=2048,
+                return_tensors="pt",
+            ).to(self.device)
+            outputs = self.model(**inputs)
+            probs = torch.sigmoid(outputs.logits)[0].cpu().numpy()
+            embeddings = outputs.hidden_states[-1][:, 0, :].cpu().numpy()[0]
+            return self.adjust_probs_for_hierarchy(probs), embeddings
 
     def compute_entropy(self, probs: np.ndarray) -> float:
         """
@@ -97,21 +131,6 @@ class RegisterSegmenter:
                 adjusted_probs[parent_idx] = 0.0
 
         return adjusted_probs
-
-    def predict_registers(self, text: str) -> np.ndarray:
-        """Predict register probabilities for a complete text segment"""
-        with torch.no_grad():
-            inputs = self.tokenizer(
-                text,
-                padding=True,
-                truncation=True,
-                max_length=2048,
-                return_tensors="pt",
-            ).to(self.device)
-            outputs = self.model(**inputs)
-            probs = torch.sigmoid(outputs.logits)[0].cpu().numpy()
-            # Adjust for hierarchy
-            return self.adjust_probs_for_hierarchy(probs)
 
     def get_dominant_registers(self, probs: np.ndarray) -> Set[str]:
         """
@@ -156,21 +175,23 @@ class RegisterSegmenter:
                 len(segment1_text) >= self.min_segment_length
                 and len(segment2_text) >= self.min_segment_length
             ):
-                # Predict registers for complete segments
-                probs1 = self.predict_registers(segment1_text)
-                probs2 = self.predict_registers(segment2_text)
+                # Predict registers and embeddings for complete segments
+                probs1, emb1 = self.predict_registers_and_embeddings(segment1_text)
+                probs2, emb2 = self.predict_registers_and_embeddings(segment2_text)
 
                 seg1 = Segment(
                     text=segment1_text,
                     start_idx=0,
                     end_idx=split_idx,
                     register_probs=probs1.tolist(),
+                    embedding=emb1.tolist(),
                 )
                 seg2 = Segment(
                     text=segment2_text,
                     start_idx=split_idx,
                     end_idx=total_sentences,
                     register_probs=probs2.tolist(),
+                    embedding=emb2.tolist(),
                 )
                 valid_segmentations.append((seg1, seg2))
 
@@ -209,34 +230,81 @@ class RegisterSegmenter:
 
         return self.compute_entropy(original_probs) - avg_entropy
 
+    def combine_segments(self, segments: List[Segment]) -> List[Segment]:
+        """Combine adjacent segments with the same registers and re-predict properties"""
+        if not segments:
+            return segments
+
+        combined = []
+        current_segment = segments[0]
+        current_registers = self.get_dominant_registers(
+            np.array(current_segment.register_probs)
+        )
+
+        for next_segment in segments[1:]:
+            next_registers = self.get_dominant_registers(
+                np.array(next_segment.register_probs)
+            )
+
+            if current_registers == next_registers:
+                # Combine segments
+                current_segment = Segment(
+                    text=current_segment.text + " " + next_segment.text,
+                    start_idx=current_segment.start_idx,
+                    end_idx=next_segment.end_idx,
+                    register_probs=[],  # Will be re-predicted
+                    embedding=[],  # Will be re-predicted
+                )
+            else:
+                # Re-predict for the current combined segment
+                probs, emb = self.predict_registers_and_embeddings(current_segment.text)
+                current_segment.register_probs = probs.tolist()
+                current_segment.embedding = emb.tolist()
+                combined.append(current_segment)
+
+                # Start new segment
+                current_segment = next_segment
+                current_registers = next_registers
+
+        # Don't forget the last segment
+        probs, emb = self.predict_registers_and_embeddings(current_segment.text)
+        current_segment.register_probs = probs.tolist()
+        current_segment.embedding = emb.tolist()
+        combined.append(current_segment)
+
+        return combined
+
     def segment_recursively(self, text: str) -> List[Segment]:
         """Recursively segment text based on register consistency"""
         # Split into sentences
         sentences = self.split_to_sentences(text)
         if len(sentences) < 2 or len(text) < self.min_segment_length * 2:
-            probs = self.predict_registers(text)
+            probs, emb = self.predict_registers_and_embeddings(text)
             return [
                 Segment(
                     text=text,
                     start_idx=0,
                     end_idx=len(sentences),
                     register_probs=probs.tolist(),
+                    embedding=emb.tolist(),
                 )
             ]
 
         # Get original registers from complete text
-        original_probs = self.predict_registers(text)
+        original_probs, _ = self.predict_registers_and_embeddings(text)
         original_registers = self.get_dominant_registers(original_probs)
 
         # Get all valid segmentations
         valid_segmentations = self.get_valid_segmentations(sentences)
         if not valid_segmentations:
+            probs, emb = self.predict_registers_and_embeddings(text)
             return [
                 Segment(
                     text=text,
                     start_idx=0,
                     end_idx=len(sentences),
-                    register_probs=original_probs.tolist(),
+                    register_probs=probs.tolist(),
+                    embedding=emb.tolist(),
                 )
             ]
 
@@ -252,12 +320,14 @@ class RegisterSegmenter:
 
         # If no beneficial split found, return original segment
         if best_score <= 0 or best_segmentation is None:
+            probs, emb = self.predict_registers_and_embeddings(text)
             return [
                 Segment(
                     text=text,
                     start_idx=0,
                     end_idx=len(sentences),
-                    register_probs=original_probs.tolist(),
+                    register_probs=probs.tolist(),
+                    embedding=emb.tolist(),
                 )
             ]
 
@@ -318,7 +388,11 @@ def process_file(
                 data = json.loads(line.strip())
                 text = data["text"]
 
+                # Get initial segmentation
                 segments = segmenter.segment_recursively(text)
+
+                # Combine segments with same registers and re-predict
+                segments = segmenter.combine_segments(segments)
 
                 if print_only:
                     print(
@@ -335,10 +409,10 @@ def process_file(
                         "register_probabilities": [
                             seg.register_probs for seg in segments
                         ],
+                        "embeddings": [seg.embedding for seg in segments],
                     }
                     fout.write(json.dumps(data, ensure_ascii=False) + "\n")
                     fout.flush()
-
         finally:
             if fout:
                 fout.close()

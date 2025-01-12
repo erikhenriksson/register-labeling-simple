@@ -1,7 +1,5 @@
 import json
 import numpy as np
-from sklearn.decomposition import PCA
-from sklearn.linear_model import LinearRegression
 from typing import Dict
 import matplotlib.pyplot as plt
 
@@ -60,100 +58,98 @@ def collect_data(
     }
 
 
-def analyze_register_variance(
-    embeddings: np.ndarray, registers: np.ndarray, n_components: int = 10
+def compute_register_variances(
+    embeddings: np.ndarray, registers: np.ndarray
 ) -> Dict[str, np.ndarray]:
-    """Analyze how each register individually explains variance in the embeddings"""
-    pca = PCA(n_components=n_components)
-    reduced_emb = pca.fit_transform(embeddings)
-
-    # Overall PCA stats
-    results = {
-        "explained_variance_ratio": pca.explained_variance_ratio_,
-        "total_variance_explained": np.sum(pca.explained_variance_ratio_),
-    }
-
-    # Analyze each register individually
+    """Compute embedding variance for each dominant register"""
     n_registers = registers.shape[1]
-    register_r2_by_component = np.zeros((n_registers, n_components))
+    register_variances = []
+    register_counts = []
 
     for reg_idx in range(n_registers):
-        for pc in range(n_components):
-            reg = LinearRegression()
-            reg.fit(registers[:, reg_idx : reg_idx + 1], reduced_emb[:, pc])
-            register_r2_by_component[reg_idx, pc] = reg.score(
-                registers[:, reg_idx : reg_idx + 1], reduced_emb[:, pc]
-            )
+        # Get embeddings where this register is dominant
+        mask = registers[:, reg_idx] == 1
+        if np.sum(mask) > 0:  # If we have any instances of this register
+            reg_embeddings = embeddings[mask]
+            # Compute variance across all embedding dimensions
+            variance = np.mean(np.var(reg_embeddings, axis=0))
+            count = np.sum(mask)
+        else:
+            variance = 0
+            count = 0
 
-    results["register_r2_by_component"] = register_r2_by_component
-    results["avg_r2_by_register"] = np.mean(register_r2_by_component, axis=1)
+        register_variances.append(variance)
+        register_counts.append(count)
 
-    return results
+    return {
+        "variances": np.array(register_variances),
+        "counts": np.array(register_counts),
+    }
 
 
 def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
-    """Plot comparison of how each dominant register explains variance"""
+    """Plot comparison of embedding variances for each dominant register"""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
-    # Plot 1: Average R² by register (bar plot comparison)
-    n_registers = len(doc_results["avg_r2_by_register"])
-    register_x = np.arange(n_registers)
-    ax1.bar(
-        register_x - 0.2, doc_results["avg_r2_by_register"], 0.4, label="Document Level"
-    )
-    ax1.bar(
-        register_x + 0.2, seg_results["avg_r2_by_register"], 0.4, label="Segment Level"
-    )
+    # Only plot registers that appear in both document and segment level
+    mask = (doc_results["counts"] > 0) & (seg_results["counts"] > 0)
+    register_x = np.arange(len(doc_results["variances"]))[mask]
+    doc_var = doc_results["variances"][mask]
+    seg_var = seg_results["variances"][mask]
+
+    # Plot 1: Variance comparison
+    ax1.bar(register_x - 0.2, doc_var, 0.4, label="Document Level")
+    ax1.bar(register_x + 0.2, seg_var, 0.4, label="Segment Level")
     ax1.set_xlabel("Register Index")
-    ax1.set_ylabel("Average R² across PCs")
-    ax1.set_title("Register Explanatory Power")
+    ax1.set_ylabel("Average Embedding Variance")
+    ax1.set_title("Embedding Variance by Register")
     ax1.legend()
 
-    # Plot 2: R² difference (segment - document) to show improvement
-    r2_diff = seg_results["avg_r2_by_register"] - doc_results["avg_r2_by_register"]
-    colors = ["green" if x > 0 else "red" for x in r2_diff]
-    ax2.bar(register_x, r2_diff, color=colors)
+    # Plot 2: Variance reduction
+    variance_reduction = (doc_var - seg_var) / doc_var * 100
+    colors = ["green" if x > 0 else "red" for x in variance_reduction]
+    ax2.bar(register_x, variance_reduction, color=colors)
     ax2.axhline(y=0, color="black", linestyle="-", linewidth=0.5)
     ax2.set_xlabel("Register Index")
-    ax2.set_ylabel("R² Difference (Segment - Document)")
-    ax2.set_title("Improvement in Register Explanatory Power\nwith Segmentation")
+    ax2.set_ylabel("Variance Reduction (%)")
+    ax2.set_title("Reduction in Variance with Segmentation")
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
 
 
-def main(
-    input_path: str,
-    output_path: str,
-    threshold: float = 0.5,
-    n_components: int = 10,
-    limit: int = 100,
-):
+def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int = 100):
     """Main analysis pipeline"""
     print("Loading and processing data...")
     data = collect_data(input_path, threshold, limit)
 
-    print("\nAnalyzing document level data...")
-    doc_results = analyze_register_variance(
-        data["document_embeddings"], data["document_registers"], n_components
+    print("\nComputing variances...")
+    doc_results = compute_register_variances(
+        data["document_embeddings"], data["document_registers"]
     )
-
-    print("\nAnalyzing segment level data...")
-    seg_results = analyze_register_variance(
-        data["segment_embeddings"], data["segment_registers"], n_components
+    seg_results = compute_register_variances(
+        data["segment_embeddings"], data["segment_registers"]
     )
 
     # Print summary statistics
     print("\nResults Summary:")
-    print(f"\nRegister-wise R² values (averaged across PCs):")
-    print(f"{'Register':>8} {'Document':>10} {'Segment':>10} {'Difference':>12}")
-    print("-" * 42)
-    for reg_idx in range(len(doc_results["avg_r2_by_register"])):
-        doc_r2 = doc_results["avg_r2_by_register"][reg_idx]
-        seg_r2 = seg_results["avg_r2_by_register"][reg_idx]
-        diff = seg_r2 - doc_r2
-        print(f"{reg_idx:>8} {doc_r2:>10.3f} {seg_r2:>10.3f} {diff:>12.3f}")
+    print(
+        f"{'Register':>8} {'Doc Count':>10} {'Seg Count':>10} {'Doc Var':>10} {'Seg Var':>10} {'% Reduction':>12}"
+    )
+    print("-" * 65)
+
+    for reg_idx in range(len(doc_results["variances"])):
+        doc_count = doc_results["counts"][reg_idx]
+        seg_count = seg_results["counts"][reg_idx]
+
+        if doc_count > 0 and seg_count > 0:
+            doc_var = doc_results["variances"][reg_idx]
+            seg_var = seg_results["variances"][reg_idx]
+            reduction = (doc_var - seg_var) / doc_var * 100 if doc_var > 0 else 0
+            print(
+                f"{reg_idx:>8} {doc_count:>10} {seg_count:>10} {doc_var:>10.3f} {seg_var:>10.3f} {reduction:>11.1f}%"
+            )
 
     # Create and save plot
     plot_results(doc_results, seg_results, output_path)
@@ -173,16 +169,8 @@ if __name__ == "__main__":
         help="Threshold for dominant register selection",
     )
     parser.add_argument(
-        "--n-components",
-        type=int,
-        default=10,
-        help="Number of principal components to analyze",
-    )
-    parser.add_argument(
         "--limit", type=int, default=100, help="Maximum number of documents to process"
     )
     args = parser.parse_args()
 
-    main(
-        args.input_file, args.output_file, args.threshold, args.n_components, args.limit
-    )
+    main(args.input_file, args.output_file, args.threshold, args.limit)

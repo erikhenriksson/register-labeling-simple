@@ -1,7 +1,7 @@
 import json
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 import numpy as np
 import spacy
 import torch
@@ -16,14 +16,15 @@ class Segment:
     register_probs: List[float]
 
 
-class EntropySegmenter:
-    def __init__(self, min_segment_length: int = 300):
+class RegisterSegmenter:
+    def __init__(self, min_segment_length: int = 300, register_threshold: float = 0.4):
         # Load spaCy for sentence splitting
         self.nlp = spacy.load("xx_ent_wiki_sm")
         if "sentencizer" not in self.nlp.pipe_names:
             self.nlp.add_pipe("sentencizer")
 
         self.min_segment_length = min_segment_length
+        self.register_threshold = register_threshold
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Load model and tokenizer
@@ -34,33 +35,88 @@ class EntropySegmenter:
         self.model.eval()
         self.id2label = self.model.config.id2label
 
-    def compute_register_probs(self, texts: List[str]) -> List[np.ndarray]:
-        """Compute register probabilities for a batch of texts"""
-        probs = []
-        batch_size = 32
+        # Set up hierarchical label structure
+        self.labels_structure = {
+            "MT": [],
+            "LY": [],
+            "SP": ["it"],
+            "ID": [],
+            "NA": ["ne", "sr", "nb"],
+            "HI": ["re"],
+            "IN": ["en", "ra", "dtp", "fi", "lt"],
+            "OP": ["rv", "ob", "rs", "av"],
+            "IP": ["ds", "ed"],
+        }
 
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
-            with torch.no_grad():
-                inputs = self.tokenizer(
-                    batch,
-                    padding=True,
-                    truncation=True,
-                    max_length=2048,
-                    return_tensors="pt",
-                ).to(self.device)
-                outputs = self.model(**inputs)
-                batch_probs = torch.sigmoid(outputs.logits).cpu().numpy()
-                probs.extend(batch_probs)
+        # Create reverse mapping: child -> parent
+        self.child_to_parent = {}
+        for parent, children in self.labels_structure.items():
+            for child in children:
+                self.child_to_parent[child] = parent
 
-        return probs
+        # Create label to index mapping
+        self.label_to_idx = {label: idx for idx, label in self.id2label.items()}
 
-    def compute_entropy(self, probs: np.ndarray) -> float:
-        """Compute entropy of register probability distribution"""
-        # Add small epsilon to avoid log(0)
-        eps = 1e-10
-        probs_safe = np.clip(probs, eps, 1.0)
-        return float(-np.sum(probs_safe * np.log(probs_safe)))
+    def adjust_probs_for_hierarchy(self, probs: np.ndarray) -> np.ndarray:
+        """
+        Adjust probabilities to enforce hierarchical consistency:
+        - If any child label is above threshold, set its parent to 0
+        """
+        adjusted_probs = probs.copy()
+
+        # For each parent-children relationship
+        for parent, children in self.labels_structure.items():
+            if not children:  # Skip if no children
+                continue
+
+            # Get indices for parent and children
+            parent_idx = self.label_to_idx[parent]
+            children_indices = [self.label_to_idx[child] for child in children]
+
+            # Check if any child is above threshold
+            children_probs = adjusted_probs[children_indices]
+            if any(prob >= self.register_threshold for prob in children_probs):
+                # If yes, set parent probability to 0
+                adjusted_probs[parent_idx] = 0.0
+
+        return adjusted_probs
+
+    def predict_registers(self, text: str) -> np.ndarray:
+        """Predict register probabilities for a complete text segment"""
+        with torch.no_grad():
+            inputs = self.tokenizer(
+                text,
+                padding=True,
+                truncation=True,
+                max_length=2048,
+                return_tensors="pt",
+            ).to(self.device)
+            outputs = self.model(**inputs)
+            probs = torch.sigmoid(outputs.logits)[0].cpu().numpy()
+            # Adjust for hierarchy
+            return self.adjust_probs_for_hierarchy(probs)
+
+    def get_dominant_registers(self, probs: np.ndarray) -> Set[str]:
+        """
+        Get set of dominant registers (those above threshold).
+        Considers hierarchical relationship when counting registers.
+        """
+        dominant = set()
+        for i, prob in enumerate(probs):
+            if prob >= self.register_threshold:
+                label = self.id2label[i]
+                # If it's a child label, add it but don't add its parent
+                if label in self.child_to_parent:
+                    dominant.add(label)
+                else:
+                    # If it's a parent label, add it only if none of its children are present
+                    children = self.labels_structure.get(label, [])
+                    child_indices = [self.label_to_idx[child] for child in children]
+                    if not any(
+                        probs[idx] >= self.register_threshold for idx in child_indices
+                    ):
+                        dominant.add(label)
+        return dominant
 
     def split_to_sentences(self, text: str) -> List[str]:
         """Split text into sentences using spaCy"""
@@ -70,32 +126,31 @@ class EntropySegmenter:
     def get_valid_segmentations(
         self,
         sentences: List[str],
-        sentence_probs: List[np.ndarray],
     ) -> List[Tuple[Segment, Segment]]:
         """Get all valid segmentations based on minimum length constraint"""
         valid_segmentations = []
         total_sentences = len(sentences)
 
         for split_idx in range(1, total_sentences):
-            segment1 = " ".join(sentences[:split_idx])
-            segment2 = " ".join(sentences[split_idx:])
+            segment1_text = " ".join(sentences[:split_idx])
+            segment2_text = " ".join(sentences[split_idx:])
 
             if (
-                len(segment1) >= self.min_segment_length
-                and len(segment2) >= self.min_segment_length
+                len(segment1_text) >= self.min_segment_length
+                and len(segment2_text) >= self.min_segment_length
             ):
-                # Average probabilities for each segment
-                probs1 = np.mean(sentence_probs[:split_idx], axis=0)
-                probs2 = np.mean(sentence_probs[split_idx:], axis=0)
+                # Predict registers for complete segments
+                probs1 = self.predict_registers(segment1_text)
+                probs2 = self.predict_registers(segment2_text)
 
                 seg1 = Segment(
-                    text=segment1,
+                    text=segment1_text,
                     start_idx=0,
                     end_idx=split_idx,
                     register_probs=probs1.tolist(),
                 )
                 seg2 = Segment(
-                    text=segment2,
+                    text=segment2_text,
                     start_idx=split_idx,
                     end_idx=total_sentences,
                     register_probs=probs2.tolist(),
@@ -105,23 +160,37 @@ class EntropySegmenter:
         return valid_segmentations
 
     def evaluate_split(
-        self, original_entropy: float, segment1: Segment, segment2: Segment
-    ) -> float:
+        self, original_registers: Set[str], segment1: Segment, segment2: Segment
+    ) -> bool:
         """
-        Evaluate a potential split based on entropy improvement.
-        Returns the improvement in average entropy (negative means improvement).
+        Evaluate if a split is beneficial based on register consistency.
+        Returns True if split is beneficial, False otherwise.
         """
-        entropy1 = self.compute_entropy(np.array(segment1.register_probs))
-        entropy2 = self.compute_entropy(np.array(segment2.register_probs))
-        avg_entropy = (entropy1 + entropy2) / 2
-        return avg_entropy - original_entropy
+        # Get dominant registers for each segment
+        registers1 = self.get_dominant_registers(np.array(segment1.register_probs))
+        registers2 = self.get_dominant_registers(np.array(segment2.register_probs))
+
+        # Split is beneficial if:
+        # 1. Both segments have at least one dominant register
+        # 2. The registers are different between segments
+        # 3. Each segment has fewer dominant registers than the original
+        if not (registers1 and registers2):  # Both must have at least one register
+            return False
+
+        if len(registers1) >= len(original_registers) or len(registers2) >= len(
+            original_registers
+        ):
+            return False
+
+        # Check if there's meaningful register difference between segments
+        return registers1 != registers2
 
     def segment_recursively(self, text: str) -> List[Segment]:
-        """Recursively segment text based on entropy improvement"""
-        # Split into sentences and compute register probabilities
+        """Recursively segment text based on register consistency"""
+        # Split into sentences
         sentences = self.split_to_sentences(text)
         if len(sentences) < 2 or len(text) < self.min_segment_length * 2:
-            probs = self.compute_register_probs([text])[0]
+            probs = self.predict_registers(text)
             return [
                 Segment(
                     text=text,
@@ -131,15 +200,12 @@ class EntropySegmenter:
                 )
             ]
 
-        # Compute probabilities for all sentences
-        sentence_probs = self.compute_register_probs(sentences)
-
-        # Compute original entropy
-        original_probs = np.mean(sentence_probs, axis=0)
-        original_entropy = self.compute_entropy(original_probs)
+        # Get original registers from complete text
+        original_probs = self.predict_registers(text)
+        original_registers = self.get_dominant_registers(original_probs)
 
         # Get all valid segmentations
-        valid_segmentations = self.get_valid_segmentations(sentences, sentence_probs)
+        valid_segmentations = self.get_valid_segmentations(sentences)
         if not valid_segmentations:
             return [
                 Segment(
@@ -150,53 +216,46 @@ class EntropySegmenter:
                 )
             ]
 
-        # Find best segmentation that improves entropy
-        best_improvement = 0
-        best_segmentation = None
-
+        # Find best segmentation that improves register consistency
         for seg1, seg2 in valid_segmentations:
-            improvement = -self.evaluate_split(original_entropy, seg1, seg2)
-            if improvement > best_improvement:
-                best_improvement = improvement
-                best_segmentation = (seg1, seg2)
+            if self.evaluate_split(original_registers, seg1, seg2):
+                # Recursively segment each part
+                final_segments = []
+                final_segments.extend(self.segment_recursively(seg1.text))
+                final_segments.extend(self.segment_recursively(seg2.text))
+                return final_segments
 
-        # If no improvement found, return original segment
-        if best_segmentation is None:
-            return [
-                Segment(
-                    text=text,
-                    start_idx=0,
-                    end_idx=len(sentences),
-                    register_probs=original_probs.tolist(),
-                )
-            ]
-
-        # Recursively segment each part
-        final_segments = []
-        for segment in best_segmentation:
-            final_segments.extend(self.segment_recursively(segment.text))
-
-        return final_segments
+        # If no beneficial split found, return original segment
+        return [
+            Segment(
+                text=text,
+                start_idx=0,
+                end_idx=len(sentences),
+                register_probs=original_probs.tolist(),
+            )
+        ]
 
 
 def get_register_labels(
-    probs: List[float], id2label: Dict[int, str], threshold: float = 0.5
+    probs: List[float], id2label: Dict[int, str], threshold: float = 0.4
 ) -> List[str]:
     """Convert probabilities to register labels using the model's id2label mapping."""
     return [id2label[i] for i, prob in enumerate(probs) if prob > threshold]
 
 
 def format_segments(
-    segments: List[Segment], doc_id: str, id2label: Dict[int, str]
+    segments: List[Segment],
+    doc_id: str,
+    id2label: Dict[int, str],
+    threshold: float = 0.4,
 ) -> str:
     """Format segments for pretty printing."""
     output = [f"Text [{doc_id}]"]
 
     for i, segment in enumerate(segments, 1):
         output.append("---")
-        labels = get_register_labels(segment.register_probs, id2label)
+        labels = get_register_labels(segment.register_probs, id2label, threshold)
         output.append(f"Segment {i}: [{', '.join(labels)}]")
-        # Truncate text if too long for display
         display_text = (
             segment.text[:10000] + "..." if len(segment.text) > 10000 else segment.text
         )
@@ -210,39 +269,40 @@ def process_file(
     input_path: str,
     output_path: str = None,
     min_segment_length: int = 300,
+    register_threshold: float = 0.4,
     print_only: bool = False,
 ):
     """Process input JSONL file and write segmented output."""
-    segmenter = EntropySegmenter(min_segment_length=min_segment_length)
+    segmenter = RegisterSegmenter(
+        min_segment_length=min_segment_length, register_threshold=register_threshold
+    )
 
     with open(input_path, "r", encoding="utf-8") as fin:
-        # Open output file only if not in print_only mode
         fout = open(output_path, "w", encoding="utf-8") if output_path else None
 
         try:
             for line_num, line in enumerate(fin, 1):
-                # Parse input JSON
                 data = json.loads(line.strip())
                 text = data["text"]
 
-                # Perform entropy-based segmentation
                 segments = segmenter.segment_recursively(text)
 
                 if print_only:
-                    # Print formatted segments
                     print(
-                        format_segments(segments, f"DOC_{line_num}", segmenter.id2label)
+                        format_segments(
+                            segments,
+                            f"DOC_{line_num}",
+                            segmenter.id2label,
+                            segmenter.register_threshold,
+                        )
                     )
                 else:
-                    # Add segmentation information to output
                     data["segmentation"] = {
                         "texts": [seg.text for seg in segments],
                         "register_probabilities": [
                             seg.register_probs for seg in segments
                         ],
                     }
-
-                    # Write updated JSON to output file
                     fout.write(json.dumps(data, ensure_ascii=False) + "\n")
                     fout.flush()
 
@@ -265,6 +325,12 @@ if __name__ == "__main__":
         "--min-length", type=int, default=300, help="Minimum segment length"
     )
     parser.add_argument(
+        "--register-threshold",
+        type=float,
+        default=0.4,
+        help="Threshold for considering a register as dominant",
+    )
+    parser.add_argument(
         "--print-only",
         action="store_true",
         help="Print segments instead of saving to file",
@@ -274,4 +340,10 @@ if __name__ == "__main__":
     if args.print_only and args.output_file:
         parser.error("Cannot specify output file when using --print-only")
 
-    process_file(args.input_file, args.output_file, args.min_length, args.print_only)
+    process_file(
+        args.input_file,
+        args.output_file,
+        args.min_length,
+        args.register_threshold,
+        args.print_only,
+    )

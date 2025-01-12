@@ -346,33 +346,32 @@ class RegisterSegmenter:
         final_segments.extend(self.segment_recursively(seg2.text))
         return final_segments
 
-    def format_segments(
-        segments: List[Segment],
-        doc_id: str,
-        id2label: Dict[int, str],
-        threshold: float = 0.4,
-    ) -> str:
-        """Format segments for pretty printing."""
-        output = [f"Text [{doc_id}]"]
 
-        for i, segment in enumerate(segments, 1):
-            output.append("---")
-            # Get register labels above threshold
-            labels = [
-                id2label[i]
-                for i, prob in enumerate(segment.register_probs)
-                if prob > threshold
-            ]
-            output.append(f"Segment {i}: [{', '.join(labels)}]")
-            display_text = (
-                segment.text[:10000] + "..."
-                if len(segment.text) > 10000
-                else segment.text
-            )
-            output.append(f"Text: {display_text}")
+def format_segments(
+    segments: List[Segment],
+    doc_id: str,
+    id2label: Dict[int, str],
+    threshold: float = 0.4,
+) -> str:
+    """Format segments for pretty printing."""
+    output = [f"Text [{doc_id}]"]
 
-        output.append("---------------------")
-        return "\n".join(output)
+    for i, segment in enumerate(segments, 1):
+        output.append("---")
+        # Get register labels above threshold
+        labels = [
+            id2label[i]
+            for i, prob in enumerate(segment.register_probs)
+            if prob > threshold
+        ]
+        output.append(f"Segment {i}: [{', '.join(labels)}]")
+        display_text = (
+            segment.text[:10000] + "..." if len(segment.text) > 10000 else segment.text
+        )
+        output.append(f"Text: {display_text}")
+
+    output.append("---------------------")
+    return "\n".join(output)
 
 
 def process_file(

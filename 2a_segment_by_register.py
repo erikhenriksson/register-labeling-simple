@@ -173,11 +173,20 @@ class RegisterSegmenter:
         # Split is beneficial if:
         # 1. At least one segment has a dominant register
         # 2. The registers are different between segments
-        if not (registers1 and registers2):  # At least one must have a register
+        # 3. All original registers are preserved in at least one segment
+        if not (registers1 or registers2):  # At least one must have a register
             return False
 
-        # Check if there's meaningful register difference between segments
-        return registers1 != registers2
+        # Check if the registers are different
+        if registers1 == registers2:
+            return False
+
+        # Check if all original registers are preserved
+        preserved_registers = registers1.union(registers2)
+        if not original_registers.issubset(preserved_registers):
+            return False
+
+        return True
 
     def segment_recursively(self, text: str) -> List[Segment]:
         """Recursively segment text based on register consistency"""
@@ -213,10 +222,26 @@ class RegisterSegmenter:
         # Find best segmentation that improves register consistency
         for seg1, seg2 in valid_segmentations:
             if self.evaluate_split(original_registers, seg1, seg2):
-                # Recursively segment each part
+                # Get registers for each segment before recursing
+                seg1_registers = self.get_dominant_registers(
+                    np.array(seg1.register_probs)
+                )
+                seg2_registers = self.get_dominant_registers(
+                    np.array(seg2.register_probs)
+                )
+
+                # Recursively segment each part, passing down their respective registers
                 final_segments = []
-                final_segments.extend(self.segment_recursively(seg1.text))
-                final_segments.extend(self.segment_recursively(seg2.text))
+                if seg1_registers:  # Only recurse if there are registers to preserve
+                    final_segments.extend(self.segment_recursively(seg1.text))
+                else:
+                    final_segments.append(seg1)
+
+                if seg2_registers:  # Only recurse if there are registers to preserve
+                    final_segments.extend(self.segment_recursively(seg2.text))
+                else:
+                    final_segments.append(seg2)
+
                 return final_segments
 
         # If no beneficial split found, return original segment

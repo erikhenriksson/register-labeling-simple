@@ -159,6 +159,23 @@ class RegisterSegmenter:
 
         return valid_segmentations
 
+    def compute_entropy(self, probs: np.ndarray) -> float:
+        """
+        Compute entropy for multilabel probabilities.
+        For each label position, we have a binary probability (p, 1-p).
+        Total entropy is the sum of entropies across all label positions.
+        """
+        eps = 1e-10  # Small constant to avoid log(0)
+
+        # Clip probabilities to avoid numerical issues
+        probs = np.clip(probs, eps, 1.0 - eps)
+
+        # For each label position, compute binary entropy: -p*log(p) - (1-p)*log(1-p)
+        binary_entropies = -(probs * np.log(probs) + (1 - probs) * np.log(1 - probs))
+
+        # Sum across all label positions
+        return float(np.sum(binary_entropies))
+
     def evaluate_split(
         self, original_registers: Set[str], segment1: Segment, segment2: Segment
     ) -> float:

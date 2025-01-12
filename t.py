@@ -37,7 +37,9 @@ def convert_to_threshold_registers(
     probabilities: np.ndarray, threshold: float = 0.5
 ) -> np.ndarray:
     """Convert probabilities to binary labels for all registers over threshold"""
-    return (probabilities >= threshold).astype(int)
+    return (probabilities >= threshold).astype(
+        int
+    )  # Simply threshold all probabilities
 
 
 def collect_data(

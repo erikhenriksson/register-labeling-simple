@@ -32,6 +32,37 @@ REGISTER_NAMES = [
     "ed",  # IP (Interactive/Interpersonal)
 ]
 
+# Mapping of sub-categories to main categories
+REGISTER_MAPPING = {
+    # Main categories map to themselves
+    "MT": "MT",
+    "LY": "LY",
+    "SP": "SP",
+    "ID": "ID",
+    "NA": "NA",
+    "HI": "HI",
+    "IN": "IN",
+    "OP": "OP",
+    "IP": "IP",
+    # Sub-categories map to their parents
+    "it": "SP",  # Spoken
+    "ne": "NA",
+    "sr": "NA",
+    "nb": "NA",  # Narrative
+    "re": "HI",  # How-to/Instructional
+    "en": "IN",
+    "ra": "IN",
+    "dtp": "IN",
+    "fi": "IN",
+    "lt": "IN",  # Informational
+    "rv": "OP",
+    "ob": "OP",
+    "rs": "OP",
+    "av": "OP",  # Opinion
+    "ds": "IP",
+    "ed": "IP",  # Interactive/Interpersonal
+}
+
 
 def convert_to_dominant_registers(
     probabilities: np.ndarray, threshold: float = 0.5
@@ -42,6 +73,21 @@ def convert_to_dominant_registers(
     if max_prob >= threshold:
         binary[probabilities >= max_prob] = 1
     return binary
+
+
+def map_to_parent_registers(registers: np.ndarray) -> np.ndarray:
+    """Map sub-category registers to their parent categories"""
+    # Create mapping array
+    mapping = np.zeros((len(REGISTER_NAMES), 9))  # 9 is the number of main categories
+    for i, reg in enumerate(REGISTER_NAMES):
+        parent_idx = REGISTER_NAMES.index(REGISTER_MAPPING[reg])
+        mapping[i, parent_idx] = 1
+
+    # Apply mapping
+    mapped_registers = registers @ mapping
+    # Normalize to ensure we still have binary labels
+    mapped_registers = (mapped_registers > 0).astype(float)
+    return mapped_registers
 
 
 def collect_data(
@@ -110,19 +156,21 @@ def collect_data(
 
 
 def compute_register_variances(
-    embeddings: np.ndarray, registers: np.ndarray
+    embeddings: np.ndarray, registers: np.ndarray, is_segment: bool = False
 ) -> Dict[str, np.ndarray]:
     """Compute embedding variance for each dominant register"""
+    # Map to parent registers if processing segments
+    if is_segment:
+        registers = map_to_parent_registers(registers)
+
     n_registers = registers.shape[1]
     register_variances = []
     register_counts = []
 
     for reg_idx in range(n_registers):
-        # Get embeddings where this register is dominant
         mask = registers[:, reg_idx] == 1
-        if np.sum(mask) > 0:  # If we have any instances of this register
+        if np.sum(mask) > 0:
             reg_embeddings = embeddings[mask]
-            # Compute variance across all embedding dimensions
             variance = np.mean(np.var(reg_embeddings, axis=0))
             count = np.sum(mask)
         else:
@@ -142,11 +190,12 @@ def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
     """Plot comparison of embedding variances for each dominant register"""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
-    # Only plot registers that appear in both document and segment level
+    # Only plot main registers that appear in both document and segment level
     mask = (doc_results["counts"] > 0) & (seg_results["counts"] > 0)
-    register_indices = np.arange(len(doc_results["variances"]))[mask]
-    doc_var = doc_results["variances"][mask]
-    seg_var = seg_results["variances"][mask]
+    mask = mask[:9]  # Only consider main categories
+    register_indices = np.arange(9)[mask]  # Only main categories
+    doc_var = doc_results["variances"][:9][mask]
+    seg_var = seg_results["variances"][:9][mask]
     register_names = [REGISTER_NAMES[i] for i in register_indices]
 
     # Plot 1: Variance comparison
@@ -192,9 +241,10 @@ def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int =
         data["document_embeddings"], data["document_registers"]
     )
     seg_results = compute_register_variances(
-        data["segment_embeddings"], data["segment_registers"]
+        data["segment_embeddings"], data["segment_registers"], is_segment=True
     )
 
+    # Print summary statistics
     print("\nResults Summary:")
     print(
         f"{'Register':>8} {'Doc Count':>10} {'Seg Count':>10} {'Doc Var':>10} {'Seg Var':>10} {'% Reduction':>12}"
@@ -204,21 +254,24 @@ def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int =
     total_reduction = 0
     valid_registers = 0
 
-    for reg_idx in range(len(doc_results["variances"])):
+    # Only process main categories (first 9 registers)
+    for reg_idx in range(9):
         doc_count = doc_results["counts"][reg_idx]
         seg_count = seg_results["counts"][reg_idx]
 
         if doc_count > 0 and seg_count > 0:
             doc_var = doc_results["variances"][reg_idx]
             seg_var = seg_results["variances"][reg_idx]
-            # Add check for zero variance
             reduction = 0 if doc_var <= 0 else (doc_var - seg_var) / doc_var * 100
             reg_name = REGISTER_NAMES[reg_idx]
             print(
                 f"{reg_name:>8} {doc_count:>10} {seg_count:>10} {doc_var:>10.3f} {seg_var:>10.3f} {reduction:>11.1f}%"
             )
-            total_reduction += reduction
-            valid_registers += 1
+            if (
+                doc_var > 0
+            ):  # Only include in average if variance reduction is meaningful
+                total_reduction += reduction
+                valid_registers += 1
 
     # Add average reduction score
     print("-" * 65)

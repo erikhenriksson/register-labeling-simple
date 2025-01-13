@@ -87,6 +87,11 @@ def compute_length_normalized_variances(
     """
     Compute length-normalized embedding variance for each register after PCA reduction
     """
+    print(f"Debug - Input shapes:")
+    print(f"embeddings shape: {embeddings.shape}")
+    print(f"registers shape: {registers.shape}")
+    print(f"lengths shape: {lengths.shape}")
+
     # Ensure registers is 2D
     if len(registers.shape) == 1:
         registers = registers.reshape(1, -1)
@@ -103,12 +108,21 @@ def compute_length_normalized_variances(
     pca = PCA(n_components=n_components)
     pca.fit(embeddings)
     reduced_embeddings = pca.transform(embeddings)
+    print(f"reduced_embeddings shape: {reduced_embeddings.shape}")
 
     for reg_idx in range(n_registers):
         mask = registers[:, reg_idx] == 1
+        print(f"\nRegister {REGISTER_NAMES[reg_idx]}:")
+        print(f"mask shape: {mask.shape}")
+        print(f"Number of True in mask: {np.sum(mask)}")
+
         if np.sum(mask) > 0:
-            reg_embeddings = reduced_embeddings[mask, :]  # Explicit 2D indexing
+            # Use boolean indexing for first dimension only
+            reg_embeddings = reduced_embeddings[mask]
             reg_lengths = lengths[mask]
+
+            print(f"reg_embeddings shape: {reg_embeddings.shape}")
+            print(f"reg_lengths shape: {reg_lengths.shape}")
 
             # Compute raw variance
             raw_variance = np.mean(np.var(reg_embeddings, axis=0))
@@ -128,6 +142,14 @@ def compute_length_normalized_variances(
         register_raw_variances.append(raw_variance)
         register_counts.append(count)
         register_avg_lengths.append(avg_length)
+
+    return {
+        "normalized_variances": np.array(register_variances),
+        "raw_variances": np.array(register_raw_variances),
+        "counts": np.array(register_counts),
+        "avg_lengths": np.array(register_avg_lengths),
+        "explained_variance_ratio": pca.explained_variance_ratio_,
+    }
 
     return {
         "normalized_variances": np.array(register_variances),

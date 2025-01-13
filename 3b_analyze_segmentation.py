@@ -55,29 +55,42 @@ def get_register_label(probs, threshold=0.4):
     return None
 
 
-def analyze_embeddings(data, level="document", min_samples=50):
-    """Analyze embeddings at document or segment level"""
+def analyze_embeddings(
+    data, level="document", min_samples=50, normalize_by_length=True
+):
+    """Analyze embeddings at document or segment level with optional length normalization"""
     register_embeddings = defaultdict(list)
+    register_lengths = defaultdict(list)  # To store text lengths
 
     for item in data:
         if level == "document":
             probs = item["register_probabilities"]
             emb = item["embedding"]
+            text_length = len(item["text"].split())  # Approximate by word count
             register = get_register_label(probs)
             if register:
                 register_embeddings[register].append(emb)
+                register_lengths[register].append(text_length)
         else:  # segment level
-            for probs, emb in zip(
+            for probs, emb, text in zip(
                 item["segmentation"]["register_probabilities"],
                 item["segmentation"]["embeddings"],
+                item["segmentation"]["texts"],
             ):
                 register = get_register_label(probs)
                 if register:
                     register_embeddings[register].append(emb)
+                    register_lengths[register].append(len(text.split()))
 
     # Only keep registers with enough samples
+    valid_registers = set(
+        k for k, v in register_embeddings.items() if len(v) >= min_samples
+    )
     register_embeddings = {
-        k: v for k, v in register_embeddings.items() if len(v) >= min_samples
+        k: v for k, v in register_embeddings.items() if k in valid_registers
+    }
+    register_lengths = {
+        k: v for k, v in register_lengths.items() if k in valid_registers
     }
 
     register_variances = {}
@@ -86,7 +99,13 @@ def analyze_embeddings(data, level="document", min_samples=50):
         pca = PCA(n_components=50)
         pca_result = pca.fit_transform(embeddings_array)
         variances = np.var(pca_result, axis=0)
-        register_variances[register] = np.mean(variances)
+        mean_variance = np.mean(variances)
+
+        if normalize_by_length:
+            mean_length = np.mean(register_lengths[register])
+            mean_variance = mean_variance / np.sqrt(mean_length)
+
+        register_variances[register] = mean_variance
 
     return register_variances
 

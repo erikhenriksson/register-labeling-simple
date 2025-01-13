@@ -41,13 +41,6 @@ def convert_to_multilabel_registers(
     return (probabilities >= threshold).astype(np.float32)
 
 
-import json
-import numpy as np
-from typing import Dict
-import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
-
-
 def compute_length_normalized_variances(
     embeddings: np.ndarray,
     registers: np.ndarray,
@@ -243,9 +236,13 @@ def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int =
 
     print("\nResults Summary:")
     print(
-        f"{'Register':>8} {'Doc Count':>10} {'Seg Count':>10} {'Raw Doc':>10} {'Raw Seg':>10} {'Norm Doc':>10} {'Norm Seg':>10}"
+        f"{'Register':>8} {'Doc Count':>10} {'Seg Count':>10} {'Raw Doc':>10} {'Raw Seg':>10} {'Raw Red%':>10} {'Norm Doc':>10} {'Norm Seg':>10} {'Norm Red%':>10}"
     )
-    print("-" * 85)
+    print("-" * 105)
+
+    total_raw_reduction = 0
+    total_norm_reduction = 0
+    valid_registers = 0
 
     for reg_idx in range(len(doc_results["normalized_variances"])):
         doc_count = doc_results["counts"][reg_idx]
@@ -257,12 +254,36 @@ def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int =
             norm_doc = doc_results["normalized_variances"][reg_idx]
             norm_seg = seg_results["normalized_variances"][reg_idx]
 
+            # Calculate reduction percentages
+            raw_reduction = ((raw_doc - raw_seg) / raw_doc * 100) if raw_doc > 0 else 0
+            norm_reduction = (
+                ((norm_doc - norm_seg) / norm_doc * 100) if norm_doc > 0 else 0
+            )
+
+            total_raw_reduction += raw_reduction
+            total_norm_reduction += norm_reduction
+            valid_registers += 1
+
             reg_name = REGISTER_NAMES[reg_idx]
             print(
                 f"{reg_name:>8} {doc_count:>10} {seg_count:>10} "
-                f"{raw_doc:>10.3f} {raw_seg:>10.3f} "
-                f"{norm_doc:>10.3f} {norm_seg:>10.3f}"
+                f"{raw_doc:>10.3f} {raw_seg:>10.3f} {raw_reduction:>10.1f}% "
+                f"{norm_doc:>10.3f} {norm_seg:>10.3f} {norm_reduction:>10.1f}%"
             )
+
+    # Add average reduction scores
+    print("-" * 105)
+    avg_raw_reduction = (
+        total_raw_reduction / valid_registers if valid_registers > 0 else 0
+    )
+    avg_norm_reduction = (
+        total_norm_reduction / valid_registers if valid_registers > 0 else 0
+    )
+    print(
+        f"{'Average':>8} {'-':>10} {'-':>10} "
+        f"{'-':>10} {'-':>10} {avg_raw_reduction:>10.1f}% "
+        f"{'-':>10} {'-':>10} {avg_norm_reduction:>10.1f}%"
+    )
 
     # Create and save plot
     plot_results(doc_results, seg_results, output_path)

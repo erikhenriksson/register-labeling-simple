@@ -97,6 +97,9 @@ def compute_length_normalized_variances(
         embeddings = embeddings.reshape(1, -1)
         lengths = np.array([lengths])
 
+    # Fix 3D registers array - collapse first two dimensions
+    if len(registers.shape) == 3:
+        registers = registers.reshape(registers.shape[0], registers.shape[2])
     n_registers = registers.shape[1]
     register_variances = []
     register_counts = []

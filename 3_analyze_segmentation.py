@@ -228,10 +228,10 @@ def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
     plt.close()
 
 
-def collect_data(
-    input_jsonl_path: str, threshold: float = 0.5, limit: int = 100
+def collect_data_from_files(
+    input_paths: Union[str, List[str]], threshold: float = 0.5, limit: int = 100
 ) -> Dict[str, np.ndarray]:
-    """Collect document and segment level data including text lengths"""
+    """Collect document and segment level data from multiple files"""
     document_embeddings = []
     document_registers = []
     document_lengths = []
@@ -244,41 +244,59 @@ def collect_data(
     total_segs = 0
     pure_segs = 0
 
-    with open(input_jsonl_path, "r") as f:
-        for i, line in enumerate(f):
-            if i >= limit:
-                break
+    # Convert single path to list for uniform processing
+    if isinstance(input_paths, str):
+        input_paths = [input_paths]
 
-            data = json.loads(line)
+    processed_docs = 0
 
-            # Process document level
-            doc_reg = convert_to_multilabel_registers(
-                np.array(data["register_probabilities"]), threshold
-            )
-            if np.sum(doc_reg) > 0:  # If not zeroed out as hybrid
-                document_embeddings.append(data["embedding"])
-                document_registers.append(doc_reg)
-                document_lengths.append(len(data["text"].split()))
-                pure_docs += 1
-            total_docs += 1
+    for input_path in input_paths:
+        print(f"Processing file: {input_path}")
 
-            # Process segment level
-            for emb, probs, text in zip(
-                data["segmentation"]["embeddings"],
-                data["segmentation"]["register_probabilities"],
-                data["segmentation"]["texts"],
-            ):
-                seg_reg = convert_to_multilabel_registers(np.array(probs), threshold)
-                if np.sum(seg_reg) > 0:  # If not zeroed out as hybrid
-                    segment_embeddings.append(emb)
-                    segment_registers.append(seg_reg)
-                    segment_lengths.append(len(text.split()))
-                    pure_segs += 1
-                total_segs += 1
+        with open(input_path, "r") as f:
+            for line in f:
+                if processed_docs >= limit:
+                    break
+
+                data = json.loads(line)
+                processed_docs += 1
+
+                # Process document level
+                doc_reg = convert_to_multilabel_registers(
+                    np.array(data["register_probabilities"]), threshold
+                )
+                if np.sum(doc_reg) > 0:  # If not zeroed out as hybrid
+                    document_embeddings.append(data["embedding"])
+                    document_registers.append(doc_reg)
+                    document_lengths.append(len(data["text"].split()))
+                    pure_docs += 1
+                total_docs += 1
+
+                # Process segment level
+                for emb, probs, text in zip(
+                    data["segmentation"]["embeddings"],
+                    data["segmentation"]["register_probabilities"],
+                    data["segmentation"]["texts"],
+                ):
+                    seg_reg = convert_to_multilabel_registers(
+                        np.array(probs), threshold
+                    )
+                    if np.sum(seg_reg) > 0:  # If not zeroed out as hybrid
+                        segment_embeddings.append(emb)
+                        segment_registers.append(seg_reg)
+                        segment_lengths.append(len(text.split()))
+                        pure_segs += 1
+                    total_segs += 1
+
+        if processed_docs >= limit:
+            print(f"Reached document limit of {limit}")
+            break
 
     print(f"\nPurity Statistics:")
     print(f"Documents: {pure_docs}/{total_docs} pure ({pure_docs/total_docs*100:.1f}%)")
     print(f"Segments: {pure_segs}/{total_segs} pure ({pure_segs/total_segs*100:.1f}%)")
+    print(f"Total files processed: {len(input_paths)}")
+    print(f"Total documents processed: {processed_docs}")
 
     return {
         "document_embeddings": np.array(document_embeddings),
@@ -290,10 +308,15 @@ def collect_data(
     }
 
 
-def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int = 100):
-    """Main analysis pipeline"""
+def main(
+    input_paths: Union[str, List[str]],
+    output_path: str,
+    threshold: float = 0.5,
+    limit: int = 100,
+):
+    """Main analysis pipeline supporting multiple input files"""
     print("Loading and processing data...")
-    data = collect_data(input_path, threshold, limit)
+    data = collect_data_from_files(input_paths, threshold, limit)
 
     print("\nComputing variances...")
     doc_results = compute_length_normalized_variances(
@@ -402,7 +425,9 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("input_file", help="Path to segmentation output JSONL")
+    parser.add_argument(
+        "input_files", nargs="+", help="Path(s) to segmentation output JSONL file(s)"
+    )
     parser.add_argument("output_file", help="Path to save the plot (PNG)")
     parser.add_argument(
         "--threshold",
@@ -411,8 +436,11 @@ if __name__ == "__main__":
         help="Threshold for dominant register selection",
     )
     parser.add_argument(
-        "--limit", type=int, default=100, help="Maximum number of documents to process"
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum total number of documents to process across all files",
     )
     args = parser.parse_args()
 
-    main(args.input_file, args.output_file, args.threshold, args.limit)
+    main(args.input_files, args.output_file, args.threshold, args.limit)

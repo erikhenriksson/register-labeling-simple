@@ -97,7 +97,7 @@ def analyze_embeddings(data, level="document"):
         print(f"\nShape for register {register}: {embeddings_array.shape}")
 
         try:
-            pca = PCA(n_components=50)
+            pca = PCA(n_components=30)
             pca_result = pca.fit_transform(embeddings_array)
             variances = np.var(pca_result, axis=0)
             register_variances[register] = np.mean(variances)
@@ -116,7 +116,7 @@ def plot_variances(variances, title, output_path):
     plt.bar(registers, values)
     plt.title(f"Average Embedding Variance by Register ({title})")
     plt.xlabel("Register")
-    plt.ylabel("Average Variance (first 50 PCA components)")
+    plt.ylabel("Average Variance (first 30 PCA components)")
     plt.xticks(rotation=45)
     plt.tight_layout()
 

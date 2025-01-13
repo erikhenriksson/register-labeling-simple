@@ -41,57 +41,152 @@ def convert_to_multilabel_registers(
     return (probabilities >= threshold).astype(np.float32)
 
 
-def compute_register_variances(
-    embeddings: np.ndarray, registers: np.ndarray, n_components: int = 10
+import json
+import numpy as np
+from typing import Dict
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+
+
+def compute_length_normalized_variances(
+    embeddings: np.ndarray,
+    registers: np.ndarray,
+    lengths: np.ndarray,
+    n_components: int = 10,
 ) -> Dict[str, np.ndarray]:
-    """Compute embedding variance for each register after PCA reduction"""
+    """
+    Compute length-normalized embedding variance for each register after PCA reduction
+
+    Args:
+        embeddings: Array of embeddings
+        registers: Binary matrix of register labels
+        lengths: Array of text lengths corresponding to each embedding
+        n_components: Number of PCA components to use
+    """
     n_registers = registers.shape[1]
     register_variances = []
     register_counts = []
+    register_raw_variances = []  # Store unnormalized variances for comparison
+    register_avg_lengths = []  # Store average lengths for analysis
 
-    # Initialize PCA once for all data to maintain consistent components
+    # Initialize and fit PCA
     pca = PCA(n_components=n_components)
-    # Fit PCA on all embeddings to get global principal components
     pca.fit(embeddings)
-
-    # Transform all embeddings
     reduced_embeddings = pca.transform(embeddings)
 
     for reg_idx in range(n_registers):
-        # Get embeddings where this register is present (prob >= threshold)
         mask = registers[:, reg_idx] == 1
         if np.sum(mask) > 0:
             reg_embeddings = reduced_embeddings[mask]
-            # Compute variance across PCA components
-            variance = np.mean(np.var(reg_embeddings, axis=0))
+            reg_lengths = lengths[mask]
+
+            # Compute raw variance
+            raw_variance = np.mean(np.var(reg_embeddings, axis=0))
+
+            # Compute length-normalized variance
+            # We multiply by sqrt(length) since we expect variance to scale roughly with sqrt of length
+            # (This is an approximation based on central limit theorem)
+            avg_length = np.mean(reg_lengths)
+            normalized_variance = raw_variance * np.sqrt(avg_length)
+
             count = np.sum(mask)
-
-            # Optionally, we could weight the variances by explained variance ratio
-            # variance = np.average(np.var(reg_embeddings, axis=0),
-            #                      weights=pca.explained_variance_ratio_)
         else:
-            variance = 0
+            raw_variance = 0
+            normalized_variance = 0
             count = 0
+            avg_length = 0
 
-        register_variances.append(variance)
+        register_variances.append(normalized_variance)
+        register_raw_variances.append(raw_variance)
         register_counts.append(count)
+        register_avg_lengths.append(avg_length)
 
-    # Also return explained variance ratio for analysis
     return {
-        "variances": np.array(register_variances),
+        "normalized_variances": np.array(register_variances),
+        "raw_variances": np.array(register_raw_variances),
         "counts": np.array(register_counts),
+        "avg_lengths": np.array(register_avg_lengths),
         "explained_variance_ratio": pca.explained_variance_ratio_,
     }
+
+
+def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
+    """Plot comparison of raw and normalized variances"""
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 12))
+
+    # Only plot registers that appear in both document and segment level
+    mask = (doc_results["counts"] > 0) & (seg_results["counts"] > 0)
+    register_indices = np.arange(len(doc_results["normalized_variances"]))[mask]
+    doc_var = doc_results["raw_variances"][mask]
+    seg_var = seg_results["raw_variances"][mask]
+    doc_norm_var = doc_results["normalized_variances"][mask]
+    seg_norm_var = seg_results["normalized_variances"][mask]
+    register_names = [REGISTER_NAMES[i] for i in register_indices]
+
+    # Plot 1: Raw variance comparison
+    x = np.arange(len(register_names))
+    ax1.bar(x - 0.2, doc_var, 0.4, label="Document Level")
+    ax1.bar(x + 0.2, seg_var, 0.4, label="Segment Level")
+    ax1.set_xlabel("Register")
+    ax1.set_ylabel("Raw Variance")
+    ax1.set_title("Raw Embedding Variance by Register\n(After PCA)")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(register_names, rotation=45, ha="right")
+    ax1.legend()
+
+    # Plot 2: Normalized variance comparison
+    ax2.bar(x - 0.2, doc_norm_var, 0.4, label="Document Level")
+    ax2.bar(x + 0.2, seg_norm_var, 0.4, label="Segment Level")
+    ax2.set_xlabel("Register")
+    ax2.set_ylabel("Length-Normalized Variance")
+    ax2.set_title("Length-Normalized Embedding Variance by Register")
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(register_names, rotation=45, ha="right")
+    ax2.legend()
+
+    # Plot 3: Length vs Variance scatter
+    ax3.scatter(doc_results["avg_lengths"][mask], doc_var, label="Documents", alpha=0.6)
+    ax3.scatter(seg_results["avg_lengths"][mask], seg_var, label="Segments", alpha=0.6)
+    ax3.set_xlabel("Average Text Length")
+    ax3.set_ylabel("Raw Variance")
+    ax3.set_title("Text Length vs Raw Variance")
+    ax3.legend()
+
+    # Plot 4: PCA explained variance
+    components = np.arange(1, len(doc_results["explained_variance_ratio"]) + 1)
+    ax4.plot(
+        components,
+        np.cumsum(doc_results["explained_variance_ratio"]),
+        label="Document Level",
+        marker="o",
+    )
+    ax4.plot(
+        components,
+        np.cumsum(seg_results["explained_variance_ratio"]),
+        label="Segment Level",
+        marker="o",
+    )
+    ax4.set_xlabel("Number of Components")
+    ax4.set_ylabel("Cumulative Explained Variance Ratio")
+    ax4.set_title("PCA Explained Variance")
+    ax4.legend()
+    ax4.grid(True)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close()
 
 
 def collect_data(
     input_jsonl_path: str, threshold: float = 0.5, limit: int = 100
 ) -> Dict[str, np.ndarray]:
-    """Collect document and segment level data with multilabel register labeling"""
+    """Collect document and segment level data including text lengths"""
     document_embeddings = []
     document_registers = []
+    document_lengths = []
     segment_embeddings = []
     segment_registers = []
+    segment_lengths = []
 
     with open(input_jsonl_path, "r") as f:
         for i, line in enumerate(f):
@@ -106,85 +201,75 @@ def collect_data(
             )
             document_embeddings.append(data["embedding"])
             document_registers.append(doc_reg)
+            document_lengths.append(
+                len(data["text"].split())
+            )  # Approximate length in words
 
             # Process segment level
-            for emb, probs in zip(
+            for emb, probs, text in zip(
                 data["segmentation"]["embeddings"],
                 data["segmentation"]["register_probabilities"],
+                data["segmentation"]["texts"],
             ):
                 seg_reg = convert_to_multilabel_registers(np.array(probs), threshold)
                 segment_embeddings.append(emb)
                 segment_registers.append(seg_reg)
+                segment_lengths.append(len(text.split()))
 
     return {
         "document_embeddings": np.array(document_embeddings),
         "document_registers": np.array(document_registers),
+        "document_lengths": np.array(document_lengths),
         "segment_embeddings": np.array(segment_embeddings),
         "segment_registers": np.array(segment_registers),
+        "segment_lengths": np.array(segment_lengths),
     }
 
 
-def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
-    """Plot comparison of embedding variances and PCA explained variance"""
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
+def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int = 100):
+    """Main analysis pipeline"""
+    print("Loading and processing data...")
+    data = collect_data(input_path, threshold, limit)
 
-    # Only plot registers that appear in both document and segment level
-    mask = (doc_results["counts"] > 0) & (seg_results["counts"] > 0)
-    register_indices = np.arange(len(doc_results["variances"]))[mask]
-    doc_var = doc_results["variances"][mask]
-    seg_var = seg_results["variances"][mask]
-    register_names = [REGISTER_NAMES[i] for i in register_indices]
-
-    # Plot 1: Variance comparison
-    x = np.arange(len(register_names))
-    ax1.bar(x - 0.2, doc_var, 0.4, label="Document Level")
-    ax1.bar(x + 0.2, seg_var, 0.4, label="Segment Level")
-    ax1.set_xlabel("Register")
-    ax1.set_ylabel("Average PCA Component Variance")
-    ax1.set_title("Embedding Variance by Register\n(After PCA)")
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(register_names, rotation=45, ha="right")
-    ax1.legend()
-
-    # Plot 2: Variance reduction
-    variance_reduction = np.zeros_like(doc_var)
-    nonzero_mask = doc_var > 0
-    variance_reduction[nonzero_mask] = (
-        (doc_var[nonzero_mask] - seg_var[nonzero_mask]) / doc_var[nonzero_mask] * 100
+    print("\nComputing variances...")
+    doc_results = compute_length_normalized_variances(
+        data["document_embeddings"],
+        data["document_registers"],
+        data["document_lengths"],
+    )
+    seg_results = compute_length_normalized_variances(
+        data["segment_embeddings"], data["segment_registers"], data["segment_lengths"]
     )
 
-    colors = ["green" if x > 0 else "red" for x in variance_reduction]
-    ax2.bar(x, variance_reduction, color=colors)
-    ax2.axhline(y=0, color="black", linestyle="-", linewidth=0.5)
-    ax2.set_xlabel("Register")
-    ax2.set_ylabel("Variance Reduction (%)")
-    ax2.set_title("Reduction in Variance with Segmentation")
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(register_names, rotation=45, ha="right")
-
-    # Plot 3: PCA explained variance
-    components = np.arange(1, len(doc_results["explained_variance_ratio"]) + 1)
-    ax3.plot(
-        components,
-        np.cumsum(doc_results["explained_variance_ratio"]),
-        label="Document Level",
-        marker="o",
+    print("\nResults Summary:")
+    print(
+        f"{'Register':>8} {'Doc Count':>10} {'Seg Count':>10} {'Raw Doc':>10} {'Raw Seg':>10} {'Norm Doc':>10} {'Norm Seg':>10}"
     )
-    ax3.plot(
-        components,
-        np.cumsum(seg_results["explained_variance_ratio"]),
-        label="Segment Level",
-        marker="o",
-    )
-    ax3.set_xlabel("Number of Components")
-    ax3.set_ylabel("Cumulative Explained Variance Ratio")
-    ax3.set_title("PCA Explained Variance")
-    ax3.legend()
-    ax3.grid(True)
+    print("-" * 85)
 
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close()
+    for reg_idx in range(len(doc_results["normalized_variances"])):
+        doc_count = doc_results["counts"][reg_idx]
+        seg_count = seg_results["counts"][reg_idx]
+
+        if doc_count > 0 and seg_count > 0:
+            raw_doc = doc_results["raw_variances"][reg_idx]
+            raw_seg = seg_results["raw_variances"][reg_idx]
+            norm_doc = doc_results["normalized_variances"][reg_idx]
+            norm_seg = seg_results["normalized_variances"][reg_idx]
+
+            reg_name = REGISTER_NAMES[reg_idx]
+            print(
+                f"{reg_name:>8} {doc_count:>10} {seg_count:>10} "
+                f"{raw_doc:>10.3f} {raw_seg:>10.3f} "
+                f"{norm_doc:>10.3f} {norm_seg:>10.3f}"
+            )
+
+    # Create and save plot
+    plot_results(doc_results, seg_results, output_path)
+    print(f"\nPlot saved to: {output_path}")
+
+
+# Rest of the code (REGISTER_NAMES and convert_to_multilabel_registers) remains the same
 
 
 def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int = 100):

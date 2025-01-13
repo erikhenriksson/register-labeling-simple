@@ -35,10 +35,40 @@ REGISTER_NAMES = [
 
 
 def convert_to_multilabel_registers(
-    probabilities: np.ndarray, threshold: float = 0.5
+    probabilities: np.ndarray, threshold: float = 0.5, exclude_hybrids: bool = True
 ) -> np.ndarray:
-    """Convert probabilities to binary labels, marking all registers above threshold"""
-    return (probabilities >= threshold).astype(np.float32)
+    """
+    Convert probabilities to binary labels, handling hierarchical structure.
+    When a child register is active, its parent is set to 0.
+    If exclude_hybrids is True, only rows with exactly one 1 are kept.
+    """
+    # First convert to binary based on threshold
+    labels = (probabilities >= threshold).astype(np.float32)
+
+    # Define parent-child relationships
+    hierarchy = {
+        "SP": [REGISTER_NAMES.index("it")],
+        "NA": [REGISTER_NAMES.index(x) for x in ["ne", "sr", "nb"]],
+        "HI": [REGISTER_NAMES.index("re")],
+        "IN": [REGISTER_NAMES.index(x) for x in ["en", "ra", "dtp", "fi", "lt"]],
+        "OP": [REGISTER_NAMES.index(x) for x in ["rv", "ob", "rs", "av"]],
+        "IP": [REGISTER_NAMES.index(x) for x in ["ds", "ed"]],
+    }
+
+    # For each parent, if any child is 1, set parent to 0
+    for parent, children in hierarchy.items():
+        parent_idx = REGISTER_NAMES.index(parent)
+        for row_idx in range(len(labels)):
+            if any(labels[row_idx, child_idx] == 1 for child_idx in children):
+                labels[row_idx, parent_idx] = 0
+
+    if exclude_hybrids:
+        # Keep only rows with exactly one 1
+        row_sums = np.sum(labels, axis=1)
+        hybrid_mask = row_sums == 1
+        labels = labels * hybrid_mask[:, np.newaxis]  # Zero out hybrid rows
+
+    return labels
 
 
 def compute_length_normalized_variances(
@@ -49,18 +79,12 @@ def compute_length_normalized_variances(
 ) -> Dict[str, np.ndarray]:
     """
     Compute length-normalized embedding variance for each register after PCA reduction
-
-    Args:
-        embeddings: Array of embeddings
-        registers: Binary matrix of register labels
-        lengths: Array of text lengths corresponding to each embedding
-        n_components: Number of PCA components to use
     """
     n_registers = registers.shape[1]
     register_variances = []
     register_counts = []
-    register_raw_variances = []  # Store unnormalized variances for comparison
-    register_avg_lengths = []  # Store average lengths for analysis
+    register_raw_variances = []
+    register_avg_lengths = []
 
     # Initialize and fit PCA
     pca = PCA(n_components=n_components)
@@ -77,8 +101,6 @@ def compute_length_normalized_variances(
             raw_variance = np.mean(np.var(reg_embeddings, axis=0))
 
             # Compute length-normalized variance
-            # We multiply by sqrt(length) since we expect variance to scale roughly with sqrt of length
-            # (This is an approximation based on central limit theorem)
             avg_length = np.mean(reg_lengths)
             normalized_variance = raw_variance * np.sqrt(avg_length)
 
@@ -181,6 +203,11 @@ def collect_data(
     segment_registers = []
     segment_lengths = []
 
+    total_docs = 0
+    pure_docs = 0
+    total_segs = 0
+    pure_segs = 0
+
     with open(input_jsonl_path, "r") as f:
         for i, line in enumerate(f):
             if i >= limit:
@@ -192,11 +219,12 @@ def collect_data(
             doc_reg = convert_to_multilabel_registers(
                 np.array(data["register_probabilities"]), threshold
             )
-            document_embeddings.append(data["embedding"])
-            document_registers.append(doc_reg)
-            document_lengths.append(
-                len(data["text"].split())
-            )  # Approximate length in words
+            if np.sum(doc_reg) > 0:  # If not zeroed out as hybrid
+                document_embeddings.append(data["embedding"])
+                document_registers.append(doc_reg)
+                document_lengths.append(len(data["text"].split()))
+                pure_docs += 1
+            total_docs += 1
 
             # Process segment level
             for emb, probs, text in zip(
@@ -205,9 +233,16 @@ def collect_data(
                 data["segmentation"]["texts"],
             ):
                 seg_reg = convert_to_multilabel_registers(np.array(probs), threshold)
-                segment_embeddings.append(emb)
-                segment_registers.append(seg_reg)
-                segment_lengths.append(len(text.split()))
+                if np.sum(seg_reg) > 0:  # If not zeroed out as hybrid
+                    segment_embeddings.append(emb)
+                    segment_registers.append(seg_reg)
+                    segment_lengths.append(len(text.split()))
+                    pure_segs += 1
+                total_segs += 1
+
+    print(f"\nPurity Statistics:")
+    print(f"Documents: {pure_docs}/{total_docs} pure ({pure_docs/total_docs*100:.1f}%)")
+    print(f"Segments: {pure_segs}/{total_segs} pure ({pure_segs/total_segs*100:.1f}%)")
 
     return {
         "document_embeddings": np.array(document_embeddings),

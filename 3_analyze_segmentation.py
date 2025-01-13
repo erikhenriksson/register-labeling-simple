@@ -96,10 +96,9 @@ def compute_length_normalized_variances(
         registers = registers.reshape(1, -1)
         embeddings = embeddings.reshape(1, -1)
         lengths = np.array([lengths])
-
-    # Fix 3D registers array - collapse first two dimensions
     if len(registers.shape) == 3:
         registers = registers.reshape(registers.shape[0], registers.shape[2])
+
     n_registers = registers.shape[1]
     register_variances = []
     register_counts = []
@@ -326,35 +325,72 @@ def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int =
             norm_doc = doc_results["normalized_variances"][reg_idx]
             norm_seg = seg_results["normalized_variances"][reg_idx]
 
-            # Calculate reduction percentages
-            raw_reduction = ((raw_doc - raw_seg) / raw_doc * 100) if raw_doc > 0 else 0
-            norm_reduction = (
-                ((norm_doc - norm_seg) / norm_doc * 100) if norm_doc > 0 else 0
-            )
+            # Only compute reductions if we have valid variances
+            if not (np.isnan(raw_doc) or np.isnan(raw_seg)):
+                raw_reduction = (
+                    ((raw_doc - raw_seg) / raw_doc * 100) if raw_doc > 0 else np.nan
+                )
+                norm_reduction = (
+                    ((norm_doc - norm_seg) / norm_doc * 100) if norm_doc > 0 else np.nan
+                )
 
-            total_raw_reduction += raw_reduction
-            total_norm_reduction += norm_reduction
-            valid_registers += 1
+                if not np.isnan(raw_reduction) and not np.isnan(norm_reduction):
+                    total_raw_reduction += raw_reduction
+                    total_norm_reduction += norm_reduction
+                    valid_registers += 1
+            else:
+                raw_reduction = np.nan
+                norm_reduction = np.nan
 
             reg_name = REGISTER_NAMES[reg_idx]
-            print(
-                f"{reg_name:>8} {doc_count:>10} {seg_count:>10} "
-                f"{raw_doc:>10.3f} {raw_seg:>10.3f} {raw_reduction:>10.1f}% "
-                f"{norm_doc:>10.3f} {norm_seg:>10.3f} {norm_reduction:>10.1f}%"
+            # Format values, showing 'n/a' for NaN
+            raw_doc_str = f"{raw_doc:>10.3f}" if not np.isnan(raw_doc) else "      n/a"
+            raw_seg_str = f"{raw_seg:>10.3f}" if not np.isnan(raw_seg) else "      n/a"
+            raw_red_str = (
+                f"{raw_reduction:>9.1f}%"
+                if not np.isnan(raw_reduction)
+                else "      n/a"
+            )
+            norm_doc_str = (
+                f"{norm_doc:>10.3f}" if not np.isnan(norm_doc) else "      n/a"
+            )
+            norm_seg_str = (
+                f"{norm_seg:>10.3f}" if not np.isnan(norm_seg) else "      n/a"
+            )
+            norm_red_str = (
+                f"{norm_reduction:>9.1f}%"
+                if not np.isnan(norm_reduction)
+                else "      n/a"
             )
 
-    # Add average reduction scores
+            print(
+                f"{reg_name:>8} {doc_count:>10} {seg_count:>10} "
+                f"{raw_doc_str} {raw_seg_str} {raw_red_str} "
+                f"{norm_doc_str} {norm_seg_str} {norm_red_str}"
+            )
+
+    # Add average reduction scores (only for valid registers)
     print("-" * 105)
     avg_raw_reduction = (
-        total_raw_reduction / valid_registers if valid_registers > 0 else 0
+        total_raw_reduction / valid_registers if valid_registers > 0 else np.nan
     )
     avg_norm_reduction = (
-        total_norm_reduction / valid_registers if valid_registers > 0 else 0
+        total_norm_reduction / valid_registers if valid_registers > 0 else np.nan
+    )
+    avg_raw_str = (
+        f"{avg_raw_reduction:>9.1f}%"
+        if not np.isnan(avg_raw_reduction)
+        else "      n/a"
+    )
+    avg_norm_str = (
+        f"{avg_norm_reduction:>9.1f}%"
+        if not np.isnan(avg_norm_reduction)
+        else "      n/a"
     )
     print(
         f"{'Average':>8} {'-':>10} {'-':>10} "
-        f"{'-':>10} {'-':>10} {avg_raw_reduction:>10.1f}% "
-        f"{'-':>10} {'-':>10} {avg_norm_reduction:>10.1f}%"
+        f"{'-':>10} {'-':>10} {avg_raw_str} "
+        f"{'-':>10} {'-':>10} {avg_norm_str}"
     )
 
     # Create and save plot

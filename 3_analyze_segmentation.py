@@ -108,7 +108,9 @@ def compute_length_normalized_variances(
             mask = mask[: embeddings.shape[0]]
 
         if np.sum(mask) > 0:
-            reg_embeddings = reduced_embeddings[mask]
+            reg_embeddings = reduced_embeddings[
+                mask, :
+            ]  # Add the explicit dimension selection with ':'
             reg_lengths = lengths[mask]
 
             # Compute raw variance

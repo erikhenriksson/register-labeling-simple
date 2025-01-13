@@ -1,8 +1,11 @@
+import json
 import numpy as np
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
+from collections import defaultdict
+import argparse
 
-# Label structure
+# Label structure as provided
 labels_structure = {
     "MT": [],
     "LY": [],
@@ -20,111 +23,127 @@ labels_all = [k for k in labels_structure.keys()] + [
 ]
 
 
-def get_single_labels(probs, threshold=0.4):
-    """Convert probabilities to labels considering hierarchy."""
+def get_parent_indices(label_structure):
+    parent_map = {}
+    for parent, children in label_structure.items():
+        parent_idx = labels_all.index(parent)
+        for child in children:
+            child_idx = labels_all.index(child)
+            parent_map[child_idx] = parent_idx
+    return parent_map
+
+
+def process_probabilities(probs, threshold=0.4):
+    """Convert probabilities to labels considering hierarchy"""
+    parent_indices = get_parent_indices(labels_structure)
     labels = (np.array(probs) > threshold).astype(int)
 
-    # Create parent-child mapping
-    parent_child_map = {}
-    current_idx = len(labels_structure)
-    for parent, children in labels_structure.items():
-        parent_idx = list(labels_structure.keys()).index(parent)
-        for _ in children:
-            parent_child_map[current_idx] = parent_idx
-            current_idx += 1
-
     # Zero out parent when child is active
-    for child_idx, parent_idx in parent_child_map.items():
+    for child_idx, parent_idx in parent_indices.items():
         if labels[child_idx] == 1:
             labels[parent_idx] = 0
 
     return labels
 
 
-def process_embeddings(embeddings, labels):
-    """Process embeddings using PCA and calculate variances."""
-    # Perform PCA
-    pca = PCA(n_components=50)
-    embeddings_pca = pca.fit_transform(embeddings)
+def get_register_label(probs, threshold=0.4):
+    """Get single register label from probabilities"""
+    labels = process_probabilities(probs, threshold)
+    active_indices = np.where(labels == 1)[0]
+    if len(active_indices) == 1:
+        return labels_all[active_indices[0]]
+    return None
 
-    # Calculate variances per register
+
+def analyze_embeddings(data, level="document"):
+    """Analyze embeddings at document or segment level"""
+    register_embeddings = defaultdict(list)
+
+    for item in data:
+        if level == "document":
+            probs = item["register_probabilities"]
+            emb = item["embedding"]
+            register = get_register_label(probs)
+            if register:
+                register_embeddings[register].append(emb)
+        else:  # segment level
+            for probs, emb in zip(
+                item["segmentation"]["register_probabilities"],
+                item["segmentation"]["embeddings"],
+            ):
+                register = get_register_label(probs)
+                if register:
+                    register_embeddings[register].append(emb)
+
+    # Only keep registers with more than 1 example
+    register_embeddings = {k: v for k, v in register_embeddings.items() if len(v) > 1}
+
+    # Compute PCA and variances
+    pca = PCA(n_components=50)
     register_variances = {}
-    for i, label in enumerate(labels_all):
-        # Get embeddings for this register
-        mask = np.array([l[i] for l in labels]) == 1
-        if np.sum(mask) > 1:  # Only calculate if we have more than 1 example
-            register_embeddings = embeddings_pca[mask]
-            variances = np.var(register_embeddings, axis=0)
-            register_variances[label] = np.mean(variances)
+
+    for register, embeddings in register_embeddings.items():
+        embeddings_array = np.array(embeddings)
+        pca_result = pca.fit_transform(embeddings_array)
+        variances = np.var(pca_result, axis=0)
+        register_variances[register] = np.mean(
+            variances
+        )  # Average variance across components
 
     return register_variances
 
 
-def visualize_variances(variances):
-    """Create bar plot of variances."""
+def plot_variances(variances, title, output_path):
     plt.figure(figsize=(12, 6))
-    labels = list(variances.keys())
+    registers = list(variances.keys())
     values = list(variances.values())
 
-    plt.bar(labels, values)
-    plt.xticks(rotation=45, ha="right")
-    plt.title("Average Embedding Variance by Register")
-    plt.ylabel("Average Variance (First 50 PCA Components)")
+    plt.bar(registers, values)
+    plt.title(f"Average Embedding Variance by Register ({title})")
+    plt.xlabel("Register")
+    plt.ylabel("Average Variance (first 50 PCA components)")
+    plt.xticks(rotation=45)
     plt.tight_layout()
 
-    # Print table
-    print("\nRegister Variances:")
-    print("-" * 40)
-    print(f"{'Register':<15} {'Variance':>10}")
-    print("-" * 40)
-    for label, value in sorted(variances.items()):
-        print(f"{label:<15} {value:>10.4f}")
+    # Save the plot
+    plt.savefig(f"{output_path}_{title.lower().replace(' ', '_')}.png")
+    plt.close()
 
 
-def analyze_document(text, register_probs, embedding):
-    """Analyze a single document."""
-    # Convert probabilities to labels
-    labels = get_single_labels(register_probs)
-
-    # Get active registers
-    active_registers = [labels_all[i] for i, l in enumerate(labels) if l == 1]
-    return labels, active_registers
-
-
-# Process first document
-print("\nProcessing document:")
-labels, registers = analyze_document(
-    data["text"], data["register_probabilities"], data["embedding"]
-)
-
-print("\nActive registers:", registers)
-
-# Process segments
-segment_labels = []
-segment_embeddings = []
-for i, (probs, emb) in enumerate(
-    zip(
-        data["segmentation"]["register_probabilities"],
-        data["segmentation"]["embeddings"],
+def main():
+    parser = argparse.ArgumentParser(
+        description="Analyze register embeddings from JSONL files"
     )
-):
-    labels, registers = analyze_document(data["segmentation"]["texts"][i], probs, emb)
-    segment_labels.append(labels)
-    segment_embeddings.append(emb)
+    parser.add_argument("files", nargs="+", help="Input JSONL files")
+    parser.add_argument(
+        "--output",
+        "-o",
+        required=True,
+        help="Output path for plots (without extension)",
+    )
+    args = parser.parse_args()
 
-# Calculate variances for document and segments
-print("\nCalculating variances...")
-segment_embeddings = np.array(segment_embeddings)
-segment_labels = np.array(segment_labels)
+    # Read data
+    data = []
+    for file_path in args.files:
+        with open(file_path, "r") as f:
+            for line in f:
+                data.append(json.loads(line))
 
-document_variances = process_embeddings(
-    np.array([data["embedding"]]), np.array([labels])
-)
-segment_variances = process_embeddings(segment_embeddings, segment_labels)
+    # Analyze at document level
+    doc_variances = analyze_embeddings(data, level="document")
+    print("\nDocument-level register variances:")
+    for register, variance in sorted(doc_variances.items()):
+        print(f"{register}: {variance:.4f}")
+    plot_variances(doc_variances, "Document Level", args.output)
 
-print("\nDocument-level variances:")
-for register, variance in document_variances.items():
-    print(f"{register}: {variance:.4f}")
+    # Analyze at segment level
+    segment_variances = analyze_embeddings(data, level="segment")
+    print("\nSegment-level register variances:")
+    for register, variance in sorted(segment_variances.items()):
+        print(f"{register}: {variance:.4f}")
+    plot_variances(segment_variances, "Segment Level", args.output)
 
-print("\nSegment-level variances:")
-visualize_variances(segment_variances)
+
+if __name__ == "__main__":
+    main()

@@ -1,6 +1,6 @@
 import json
 import numpy as np
-from typing import Dict
+from typing import Dict, List, Union
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 

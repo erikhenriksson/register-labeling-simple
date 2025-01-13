@@ -42,6 +42,10 @@ def convert_to_multilabel_registers(
     When a child register is active, its parent is set to 0.
     If exclude_hybrids is True, only rows with exactly one 1 are kept.
     """
+    # Ensure probabilities is 2D
+    if len(probabilities.shape) == 1:
+        probabilities = probabilities.reshape(1, -1)
+
     # First convert to binary based on threshold
     labels = (probabilities >= threshold).astype(np.float32)
 
@@ -58,7 +62,7 @@ def convert_to_multilabel_registers(
     # For each parent, if any child is 1, set parent to 0
     for parent, children in hierarchy.items():
         parent_idx = REGISTER_NAMES.index(parent)
-        for row_idx in range(len(labels)):
+        for row_idx in range(labels.shape[0]):
             if any(labels[row_idx, child_idx] == 1 for child_idx in children):
                 labels[row_idx, parent_idx] = 0
 
@@ -68,6 +72,9 @@ def convert_to_multilabel_registers(
         hybrid_mask = row_sums == 1
         labels = labels * hybrid_mask[:, np.newaxis]  # Zero out hybrid rows
 
+    # If input was 1D, return 1D
+    if len(probabilities.shape) == 1:
+        return labels[0]
     return labels
 
 

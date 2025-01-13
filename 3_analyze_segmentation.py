@@ -87,6 +87,9 @@ def compute_length_normalized_variances(
     """
     Compute length-normalized embedding variance for each register after PCA reduction
     """
+    # Ensure registers is 2D
+    if len(registers.shape) == 1:
+        registers = registers.reshape(1, -1)
     n_registers = registers.shape[1]
     register_variances = []
     register_counts = []
@@ -100,6 +103,10 @@ def compute_length_normalized_variances(
 
     for reg_idx in range(n_registers):
         mask = registers[:, reg_idx] == 1
+        # Check if mask shape matches embeddings first dimension
+        if mask.shape[0] != embeddings.shape[0]:
+            mask = mask[: embeddings.shape[0]]
+
         if np.sum(mask) > 0:
             reg_embeddings = reduced_embeddings[mask]
             reg_lengths = lengths[mask]

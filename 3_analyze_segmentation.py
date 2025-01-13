@@ -2,6 +2,7 @@ import json
 import numpy as np
 from typing import Dict
 import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
 
 # Register names mapping
 REGISTER_NAMES = [
@@ -41,21 +42,33 @@ def convert_to_multilabel_registers(
 
 
 def compute_register_variances(
-    embeddings: np.ndarray, registers: np.ndarray
+    embeddings: np.ndarray, registers: np.ndarray, n_components: int = 10
 ) -> Dict[str, np.ndarray]:
-    """Compute embedding variance for each register, counting texts for all registers above threshold"""
+    """Compute embedding variance for each register after PCA reduction"""
     n_registers = registers.shape[1]
     register_variances = []
     register_counts = []
+
+    # Initialize PCA once for all data to maintain consistent components
+    pca = PCA(n_components=n_components)
+    # Fit PCA on all embeddings to get global principal components
+    pca.fit(embeddings)
+
+    # Transform all embeddings
+    reduced_embeddings = pca.transform(embeddings)
 
     for reg_idx in range(n_registers):
         # Get embeddings where this register is present (prob >= threshold)
         mask = registers[:, reg_idx] == 1
         if np.sum(mask) > 0:
-            reg_embeddings = embeddings[mask]
-            # Compute variance across all embedding dimensions
+            reg_embeddings = reduced_embeddings[mask]
+            # Compute variance across PCA components
             variance = np.mean(np.var(reg_embeddings, axis=0))
             count = np.sum(mask)
+
+            # Optionally, we could weight the variances by explained variance ratio
+            # variance = np.average(np.var(reg_embeddings, axis=0),
+            #                      weights=pca.explained_variance_ratio_)
         else:
             variance = 0
             count = 0
@@ -63,9 +76,11 @@ def compute_register_variances(
         register_variances.append(variance)
         register_counts.append(count)
 
+    # Also return explained variance ratio for analysis
     return {
         "variances": np.array(register_variances),
         "counts": np.array(register_counts),
+        "explained_variance_ratio": pca.explained_variance_ratio_,
     }
 
 
@@ -110,8 +125,8 @@ def collect_data(
 
 
 def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
-    """Plot comparison of embedding variances for each register"""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    """Plot comparison of embedding variances and PCA explained variance"""
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
 
     # Only plot registers that appear in both document and segment level
     mask = (doc_results["counts"] > 0) & (seg_results["counts"] > 0)
@@ -125,8 +140,8 @@ def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
     ax1.bar(x - 0.2, doc_var, 0.4, label="Document Level")
     ax1.bar(x + 0.2, seg_var, 0.4, label="Segment Level")
     ax1.set_xlabel("Register")
-    ax1.set_ylabel("Average Embedding Variance")
-    ax1.set_title("Embedding Variance by Register")
+    ax1.set_ylabel("Average PCA Component Variance")
+    ax1.set_title("Embedding Variance by Register\n(After PCA)")
     ax1.set_xticks(x)
     ax1.set_xticklabels(register_names, rotation=45, ha="right")
     ax1.legend()
@@ -146,6 +161,26 @@ def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
     ax2.set_title("Reduction in Variance with Segmentation")
     ax2.set_xticks(x)
     ax2.set_xticklabels(register_names, rotation=45, ha="right")
+
+    # Plot 3: PCA explained variance
+    components = np.arange(1, len(doc_results["explained_variance_ratio"]) + 1)
+    ax3.plot(
+        components,
+        np.cumsum(doc_results["explained_variance_ratio"]),
+        label="Document Level",
+        marker="o",
+    )
+    ax3.plot(
+        components,
+        np.cumsum(seg_results["explained_variance_ratio"]),
+        label="Segment Level",
+        marker="o",
+    )
+    ax3.set_xlabel("Number of Components")
+    ax3.set_ylabel("Cumulative Explained Variance Ratio")
+    ax3.set_title("PCA Explained Variance")
+    ax3.legend()
+    ax3.grid(True)
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")

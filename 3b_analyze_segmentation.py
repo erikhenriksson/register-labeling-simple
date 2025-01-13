@@ -59,6 +59,14 @@ def analyze_embeddings(data, level="document"):
     """Analyze embeddings at document or segment level"""
     register_embeddings = defaultdict(list)
 
+    # First, let's check the embedding dimensions
+    if level == "document":
+        first_embedding = data[0]["embedding"]
+        print(f"Embedding dimension: {len(first_embedding)}")
+    else:
+        first_embedding = data[0]["segmentation"]["embeddings"][0]
+        print(f"Embedding dimension: {len(first_embedding)}")
+
     for item in data:
         if level == "document":
             probs = item["register_probabilities"]
@@ -75,20 +83,27 @@ def analyze_embeddings(data, level="document"):
                 if register:
                     register_embeddings[register].append(emb)
 
+    # Print number of examples per register before filtering
+    print("\nNumber of examples per register before filtering:")
+    for register, embeddings in register_embeddings.items():
+        print(f"{register}: {len(embeddings)}")
+
     # Only keep registers with more than 1 example
     register_embeddings = {k: v for k, v in register_embeddings.items() if len(v) > 1}
 
-    # Compute PCA and variances
-    pca = PCA(n_components=50)
     register_variances = {}
-
     for register, embeddings in register_embeddings.items():
         embeddings_array = np.array(embeddings)
-        pca_result = pca.fit_transform(embeddings_array)
-        variances = np.var(pca_result, axis=0)
-        register_variances[register] = np.mean(
-            variances
-        )  # Average variance across components
+        print(f"\nShape for register {register}: {embeddings_array.shape}")
+
+        try:
+            pca = PCA(n_components=50)
+            pca_result = pca.fit_transform(embeddings_array)
+            variances = np.var(pca_result, axis=0)
+            register_variances[register] = np.mean(variances)
+        except ValueError as e:
+            print(f"Error processing register {register}: {e}")
+            print(f"Data shape: {embeddings_array.shape}")
 
     return register_variances
 

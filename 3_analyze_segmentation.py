@@ -269,59 +269,6 @@ def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int =
     print(f"\nPlot saved to: {output_path}")
 
 
-# Rest of the code (REGISTER_NAMES and convert_to_multilabel_registers) remains the same
-
-
-def main(input_path: str, output_path: str, threshold: float = 0.5, limit: int = 100):
-    """Main analysis pipeline"""
-    print("Loading and processing data...")
-    data = collect_data(input_path, threshold, limit)
-
-    print("\nComputing variances...")
-    doc_results = compute_register_variances(
-        data["document_embeddings"], data["document_registers"]
-    )
-    seg_results = compute_register_variances(
-        data["segment_embeddings"], data["segment_registers"]
-    )
-
-    print("\nResults Summary:")
-    print(
-        f"{'Register':>8} {'Doc Count':>10} {'Seg Count':>10} {'Doc Var':>10} {'Seg Var':>10} {'% Reduction':>12}"
-    )
-    print("-" * 65)
-
-    total_reduction = 0
-    valid_registers = 0
-
-    for reg_idx in range(len(doc_results["variances"])):
-        doc_count = doc_results["counts"][reg_idx]
-        seg_count = seg_results["counts"][reg_idx]
-
-        if doc_count > 0 and seg_count > 0:
-            doc_var = doc_results["variances"][reg_idx]
-            seg_var = seg_results["variances"][reg_idx]
-            # Add check for zero variance
-            reduction = 0 if doc_var <= 0 else (doc_var - seg_var) / doc_var * 100
-            reg_name = REGISTER_NAMES[reg_idx]
-            print(
-                f"{reg_name:>8} {doc_count:>10} {seg_count:>10} {doc_var:>10.3f} {seg_var:>10.3f} {reduction:>11.1f}%"
-            )
-            total_reduction += reduction
-            valid_registers += 1
-
-    # Add average reduction score
-    print("-" * 65)
-    avg_reduction = total_reduction / valid_registers if valid_registers > 0 else 0
-    print(
-        f"{'Average':>8} {'-':>10} {'-':>10} {'-':>10} {'-':>10} {avg_reduction:>11.1f}%"
-    )
-
-    # Create and save plot
-    plot_results(doc_results, seg_results, output_path)
-    print(f"\nPlot saved to: {output_path}")
-
-
 if __name__ == "__main__":
     import argparse
 

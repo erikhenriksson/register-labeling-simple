@@ -104,8 +104,10 @@ def analyze_embeddings(
         if normalize_by_length and level == "segment" and doc_lengths:
             mean_length = np.mean(register_lengths[register])
             doc_mean_length = np.mean(doc_lengths[register])
-            # For segments, scale variance down by sqrt(doc_length/segment_length)
-            mean_variance = mean_variance * np.sqrt(doc_mean_length / mean_length)
+            # For segments, scale variance down by sqrt(segment_length/doc_length)
+            mean_variance = mean_variance * np.sqrt(
+                mean_length / doc_mean_length
+            )  # CORRECTED
 
         register_variances[register] = mean_variance
 

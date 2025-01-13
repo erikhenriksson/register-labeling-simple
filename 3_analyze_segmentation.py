@@ -81,7 +81,7 @@ def compute_length_normalized_variances(
     embeddings: np.ndarray,
     registers: np.ndarray,
     lengths: np.ndarray,
-    n_components: int = 1,
+    n_components: int = 20,
 ) -> Dict[str, np.ndarray]:
     """
     Compute length-normalized embedding variance for each register after PCA reduction

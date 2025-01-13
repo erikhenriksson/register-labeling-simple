@@ -56,7 +56,7 @@ def get_register_label(probs, threshold=0.4):
 
 
 def analyze_embeddings(
-    data, level="document", min_samples=50, normalize_by_length=True
+    data, level="document", min_samples=50, normalize_by_length=True, doc_lengths=None
 ):
     """Analyze embeddings at document or segment level with optional length normalization"""
     register_embeddings = defaultdict(list)
@@ -101,17 +101,21 @@ def analyze_embeddings(
         variances = np.var(pca_result, axis=0)
         mean_variance = np.mean(variances)
 
-        if normalize_by_length:
+        if normalize_by_length and level == "segment" and doc_lengths:
             mean_length = np.mean(register_lengths[register])
-            mean_variance = mean_variance / np.sqrt(mean_length)
+            doc_mean_length = np.mean(doc_lengths[register])
+            # For segments, scale variance down by sqrt(doc_length/segment_length)
+            mean_variance = mean_variance * np.sqrt(doc_mean_length / mean_length)
 
         register_variances[register] = mean_variance
 
-    return register_variances
+    return register_variances, register_lengths
 
 
-def plot_comparative_variances(doc_variances, segment_variances, output_path):
-    # Find common registers with enough data
+def plot_comparative_variances(
+    doc_variances, segment_variances, output_path, normalized=False
+):
+    # Find common registers
     common_registers = sorted(set(doc_variances.keys()) & set(segment_variances.keys()))
 
     if not common_registers:
@@ -122,11 +126,9 @@ def plot_comparative_variances(doc_variances, segment_variances, output_path):
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    # Set the positions of the bars
     x = np.arange(len(common_registers))
     width = 0.35
 
-    # Create bars
     rects1 = ax.bar(
         x - width / 2,
         [doc_variances[r] for r in common_registers],
@@ -140,16 +142,17 @@ def plot_comparative_variances(doc_variances, segment_variances, output_path):
         label="Segment Level",
     )
 
-    # Customize the plot
     ax.set_ylabel("Average Variance (first 50 PCA components)")
-    ax.set_title("Embedding Variance Comparison: Document vs Segment Level")
+    title = "Embedding Variance Comparison: Document vs Segment Level"
+    if normalized:
+        title += " (Length Normalized)"
+    ax.set_title(title)
     ax.set_xticks(x)
     ax.set_xticklabels(common_registers, rotation=45)
     ax.legend()
 
-    # Adjust layout and save
     plt.tight_layout()
-    plt.savefig(f"{output_path}_comparison.png")
+    plt.savefig(f"{output_path}_comparison{'_normalized' if normalized else ''}.png")
     plt.close()
 
 
@@ -164,6 +167,12 @@ def main():
         required=True,
         help="Output path for plots (without extension)",
     )
+    parser.add_argument(
+        "--normalize",
+        "-n",
+        action="store_true",
+        help="Normalize variances by text length",
+    )
     args = parser.parse_args()
 
     # Read data
@@ -173,21 +182,38 @@ def main():
             for line in f:
                 data.append(json.loads(line))
 
-    # Analyze at both levels
-    doc_variances = analyze_embeddings(data, level="document")
-    segment_variances = analyze_embeddings(data, level="segment")
+    # First get document level variances and lengths
+    doc_variances, doc_lengths = analyze_embeddings(
+        data, level="document", normalize_by_length=False
+    )
 
-    # Print results
-    print("\nDocument-level register variances:")
-    for register, variance in sorted(doc_variances.items()):
-        print(f"{register}: {variance:.4f}")
+    # Then get segment level variances, using document lengths for normalization
+    segment_variances, segment_lengths = analyze_embeddings(
+        data,
+        level="segment",
+        normalize_by_length=args.normalize,
+        doc_lengths=doc_lengths,
+    )
 
-    print("\nSegment-level register variances:")
-    for register, variance in sorted(segment_variances.items()):
-        print(f"{register}: {variance:.4f}")
+    # Print results with length information
+    print("\nDocument-level analysis:")
+    for register in sorted(doc_variances.keys()):
+        avg_length = np.mean(doc_lengths[register])
+        print(
+            f"{register}: variance = {doc_variances[register]:.4f}, avg length = {avg_length:.1f}"
+        )
+
+    print("\nSegment-level analysis:")
+    for register in sorted(segment_variances.keys()):
+        avg_length = np.mean(segment_lengths[register])
+        print(
+            f"{register}: variance = {segment_variances[register]:.4f}, avg length = {avg_length:.1f}"
+        )
 
     # Create comparative plot
-    plot_comparative_variances(doc_variances, segment_variances, args.output)
+    plot_comparative_variances(
+        doc_variances, segment_variances, args.output, args.normalize
+    )
 
 
 if __name__ == "__main__":

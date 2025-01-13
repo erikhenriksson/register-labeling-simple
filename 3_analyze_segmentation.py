@@ -42,8 +42,10 @@ def convert_to_multilabel_registers(
     When a child register is active, its parent is set to 0.
     If exclude_hybrids is True, only rows with exactly one 1 are kept.
     """
-    # Ensure probabilities is 2D
-    if len(probabilities.shape) == 1:
+    # Handle different input shapes
+    if len(probabilities.shape) == 3:
+        probabilities = probabilities.reshape(probabilities.shape[0], -1)
+    elif len(probabilities.shape) == 1:
         probabilities = probabilities.reshape(1, -1)
 
     # First convert to binary based on threshold
@@ -72,10 +74,7 @@ def convert_to_multilabel_registers(
         hybrid_mask = row_sums == 1
         labels = labels * hybrid_mask[:, np.newaxis]  # Zero out hybrid rows
 
-    # If input was 1D, return 1D
-    if len(probabilities.shape) == 1:
-        return labels[0]
-    return labels
+    return labels  # Always return 2D array
 
 
 def compute_length_normalized_variances(

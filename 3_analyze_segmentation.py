@@ -166,7 +166,16 @@ def plot_results(doc_results: Dict, seg_results: Dict, output_path: str):
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 12))
 
     # Only plot registers that appear in both document and segment level
-    mask = (doc_results["counts"] > 0) & (seg_results["counts"] > 0)
+    # and have non-NA values
+    mask = (
+        (doc_results["counts"] > 0)
+        & (seg_results["counts"] > 0)
+        & ~np.isnan(doc_results["raw_variances"])
+        & ~np.isnan(seg_results["raw_variances"])
+        & ~np.isnan(doc_results["normalized_variances"])
+        & ~np.isnan(seg_results["normalized_variances"])
+    )
+
     register_indices = np.arange(len(doc_results["normalized_variances"]))[mask]
     doc_var = doc_results["raw_variances"][mask]
     seg_var = seg_results["raw_variances"][mask]

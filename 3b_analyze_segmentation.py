@@ -4,6 +4,7 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from collections import defaultdict
 import argparse
+from collections import Counter
 
 # Label structure as provided
 labels_structure = {
@@ -31,6 +32,67 @@ def get_parent_indices(label_structure):
             child_idx = labels_all.index(child)
             parent_map[child_idx] = parent_idx
     return parent_map
+
+
+def analyze_label_frequencies(data):
+    """Analyze frequencies of single-label texts for documents and segments"""
+    doc_labels = []
+    segment_labels = []
+
+    # For tracking multiple labels and no labels
+    doc_multi = 0
+    doc_none = 0
+    seg_multi = 0
+    seg_none = 0
+
+    for item in data:
+        # Document level
+        doc_probs = item["register_probabilities"]
+        labels = process_probabilities(doc_probs)
+        active = np.where(labels == 1)[0]
+        if len(active) == 0:
+            doc_none += 1
+        elif len(active) == 1:
+            doc_labels.append(labels_all[active[0]])
+        else:
+            doc_multi += 1
+            print(f"Multi-label doc example: {[labels_all[i] for i in active]}")
+
+        # Segment level
+        for probs in item["segmentation"]["register_probabilities"]:
+            labels = process_probabilities(probs)
+            active = np.where(labels == 1)[0]
+            if len(active) == 0:
+                seg_none += 1
+            elif len(active) == 1:
+                segment_labels.append(labels_all[active[0]])
+            else:
+                seg_multi += 1
+                print(f"Multi-label segment example: {[labels_all[i] for i in active]}")
+
+    # Count frequencies
+    print("\nDocument Level Analysis:")
+    print(f"Total documents: {len(data)}")
+    print(f"No label: {doc_none}")
+    print(f"Single label: {len(doc_labels)}")
+    print(f"Multiple labels: {doc_multi}")
+    print("\nLabel frequencies:")
+    doc_freq = Counter(doc_labels)
+    for label in sorted(doc_freq.keys()):
+        print(f"{label}: {doc_freq[label]}")
+
+    print("\nSegment Level Analysis:")
+    total_segments = sum(
+        len(item["segmentation"]["register_probabilities"]) for item in data
+    )
+    print(f"Total segments: {total_segments}")
+    print(f"No label: {seg_none}")
+    print(f"Single label: {len(segment_labels)}")
+    print(f"Multiple labels: {seg_multi}")
+    print("\nLabel frequencies:")
+    seg_freq = Counter(segment_labels)
+    for label in sorted(seg_freq.keys()):
+        print(f"{label}: {seg_freq[label]}")
 
 
 def process_probabilities(probs, threshold=0.4):
@@ -185,6 +247,9 @@ def main():
         with open(file_path, "r") as f:
             for line in f:
                 data.append(json.loads(line))
+
+    print("Analyzing label frequencies...")
+    analyze_label_frequencies(data)
 
     # First get document level variances and lengths
     doc_variances, doc_lengths = analyze_embeddings(

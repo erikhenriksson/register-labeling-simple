@@ -417,35 +417,29 @@ def plot_entropy_comparison(doc_entropies, segment_entropies, output_path):
         )
         return
 
-    # Prepare data
-    doc_label_ent = [doc_entropies[r][0] for r in common_registers]
-    doc_emb_ent = [doc_entropies[r][2] for r in common_registers]  # Using PCA entropy
-    seg_label_ent = [segment_entropies[r][0] for r in common_registers]
-    seg_emb_ent = [segment_entropies[r][2] for r in common_registers]
-
-    # Create figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
-
-    # Plot label entropies
     x = np.arange(len(common_registers))
     width = 0.35
 
-    ax1.bar(x - width / 2, doc_label_ent, width, label="Document Level")
-    ax1.bar(x + width / 2, seg_label_ent, width, label="Segment Level")
-    ax1.set_ylabel("Label Entropy")
-    ax1.set_title("Label Entropy Comparison")
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(common_registers, rotation=45)
-    ax1.legend()
+    # Create single plot for prediction entropies
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.bar(
+        x - width / 2,
+        [doc_entropies[r] for r in common_registers],
+        width,
+        label="Document Level",
+    )
+    ax.bar(
+        x + width / 2,
+        [segment_entropies[r] for r in common_registers],
+        width,
+        label="Segment Level",
+    )
 
-    # Plot embedding entropies
-    ax2.bar(x - width / 2, doc_emb_ent, width, label="Document Level")
-    ax2.bar(x + width / 2, seg_emb_ent, width, label="Segment Level")
-    ax2.set_ylabel("Embedding Entropy (PCA)")
-    ax2.set_title("Embedding Entropy Comparison")
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(common_registers, rotation=45)
-    ax2.legend()
+    ax.set_ylabel("Prediction Entropy")
+    ax.set_title("Prediction Entropy Comparison")
+    ax.set_xticks(x)
+    ax.set_xticklabels(common_registers, rotation=45)
+    ax.legend()
 
     plt.tight_layout()
     plt.savefig(f"{output_path}_entropy_comparison.png")

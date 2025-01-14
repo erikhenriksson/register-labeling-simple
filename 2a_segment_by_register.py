@@ -233,6 +233,10 @@ class RegisterSegmenter:
         entropy2 = self.compute_entropy(np.array(segment2.register_probs))
         avg_entropy = (entropy1 + entropy2) / 2
 
+        print(
+            f"Split: {segment1.text[:10]} | {segment2.text[:10]} | Original: {original_registers} | New: {preserved_registers} | Entropy: {avg_entropy}"
+        )
+
         return self.compute_entropy(original_probs) - avg_entropy
 
     def combine_segments(self, segments: List[Segment]) -> List[Segment]:

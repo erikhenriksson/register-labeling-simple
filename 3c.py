@@ -490,6 +490,41 @@ def plot_mi_comparison(doc_mi, segment_mi, output_path):
     plt.close()
 
 
+def compute_prediction_entropies(data, level="document"):
+    """
+    Compute average entropy of predictions for each register.
+    """
+    register_entropies = {}
+
+    for item in data:
+        if level == "document":
+            probs = item["register_probabilities"]
+            register = get_register_label(probs)
+            if register:
+                # Get binary entropy for each register prediction
+                for reg_idx, reg_prob in enumerate(probs):
+                    reg_name = labels_all[reg_idx]
+                    if reg_name not in register_entropies:
+                        register_entropies[reg_name] = []
+                    register_entropies[reg_name].append(binary_entropy(reg_prob))
+        else:  # segment level
+            for probs in item["segmentation"]["register_probabilities"]:
+                register = get_register_label(probs)
+                if register:
+                    for reg_idx, reg_prob in enumerate(probs):
+                        reg_name = labels_all[reg_idx]
+                        if reg_name not in register_entropies:
+                            register_entropies[reg_name] = []
+                        register_entropies[reg_name].append(binary_entropy(reg_prob))
+
+    # Compute average entropy for each register
+    return {
+        reg: np.mean(entropies)
+        for reg, entropies in register_entropies.items()
+        if len(entropies) >= 10
+    }  # Only return registers with enough samples
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Analyze register embeddings from JSONL files"

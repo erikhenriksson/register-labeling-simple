@@ -117,7 +117,7 @@ def get_register_label(probs, threshold=0.4):
 
 
 def analyze_embeddings(
-    data, level="document", min_samples=50, normalize_by_length=True, doc_lengths=None
+    data, level="document", min_samples=10, normalize_by_length=True, doc_lengths=None
 ):
     """Analyze embeddings at document or segment level with optional length normalization"""
     register_embeddings = defaultdict(list)
@@ -157,7 +157,7 @@ def analyze_embeddings(
     register_variances = {}
     for register, embeddings in register_embeddings.items():
         embeddings_array = np.array(embeddings)
-        pca = PCA(n_components=50)
+        pca = PCA(n_components=10)
         pca_result = pca.fit_transform(embeddings_array)
         variances = np.var(pca_result, axis=0)
         mean_variance = np.mean(variances)

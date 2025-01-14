@@ -60,13 +60,13 @@ def analyze_embeddings(
 ):
     """Analyze embeddings at document or segment level with optional length normalization"""
     register_embeddings = defaultdict(list)
-    register_lengths = defaultdict(list)  # To store text lengths
+    register_lengths = defaultdict(list)
 
     for item in data:
         if level == "document":
             probs = item["register_probabilities"]
             emb = item["embedding"]
-            text_length = len(item["text"].split())  # Approximate by word count
+            text_length = len(item["text"].split())
             register = get_register_label(probs)
             if register:
                 register_embeddings[register].append(emb)
@@ -102,12 +102,15 @@ def analyze_embeddings(
         mean_variance = np.mean(variances)
 
         if normalize_by_length and level == "segment" and doc_lengths:
-            mean_length = np.mean(register_lengths[register])
-            doc_mean_length = np.mean(doc_lengths[register])
-            # For segments, scale variance down by sqrt(segment_length/doc_length)
-            mean_variance = mean_variance * np.sqrt(
-                mean_length / doc_mean_length
-            )  # CORRECTED
+            # Only normalize if we have document length data for this register
+            if register in doc_lengths:
+                mean_length = np.mean(register_lengths[register])
+                doc_mean_length = np.mean(doc_lengths[register])
+                mean_variance = mean_variance * np.sqrt(mean_length / doc_mean_length)
+            else:
+                print(
+                    f"Warning: No document-level data for register '{register}', skipping length normalization"
+                )
 
         register_variances[register] = mean_variance
 

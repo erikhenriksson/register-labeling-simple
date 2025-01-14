@@ -42,7 +42,6 @@ def process_probabilities(probs, threshold=0.4):
     for child_idx, parent_idx in parent_indices.items():
         if labels[child_idx] == 1:
             labels[parent_idx] = 0
-    print(labels)
     return labels
 
 

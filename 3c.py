@@ -118,6 +118,94 @@ def get_register_label(probs, threshold=0.4):
     return None
 
 
+def binary_entropy(p):
+    """Compute binary entropy."""
+    if p == 0 or p == 1:
+        return 0
+    return -(p * np.log2(p) + (1 - p) * np.log2(1 - p))
+
+
+def compute_register_entropies(data, level="document"):
+    """
+    Compute label entropy and embedding entropy for each register.
+
+    Returns:
+        dict: Register -> (label_entropy, embedding_entropy_raw, embedding_entropy_pca)
+    """
+    register_data = defaultdict(lambda: {"embeddings": [], "is_register": []})
+
+    # Collect data
+    for item in data:
+        if level == "document":
+            probs = item["register_probabilities"]
+            emb = item["embedding"]
+            register = get_register_label(probs)
+            if register:
+                # Add to positive examples for this register
+                register_data[register]["embeddings"].append(emb)
+                register_data[register]["is_register"].append(1)
+                # Add to negative examples for all other registers
+                for other_reg in register_data.keys():
+                    if other_reg != register:
+                        register_data[other_reg]["embeddings"].append(emb)
+                        register_data[other_reg]["is_register"].append(0)
+        else:  # segment level
+            for probs, emb in zip(
+                item["segmentation"]["register_probabilities"],
+                item["segmentation"]["embeddings"],
+            ):
+                register = get_register_label(probs)
+                if register:
+                    register_data[register]["embeddings"].append(emb)
+                    register_data[register]["is_register"].append(1)
+                    for other_reg in register_data.keys():
+                        if other_reg != register:
+                            register_data[other_reg]["embeddings"].append(emb)
+                            register_data[other_reg]["is_register"].append(0)
+
+    # Compute entropies
+    register_entropies = {}
+    for register, data in register_data.items():
+        if len(data["embeddings"]) < 10:  # Skip registers with too few samples
+            continue
+
+        # Label entropy
+        p_register = np.mean(data["is_register"])
+        label_entropy = binary_entropy(p_register)
+
+        # Embedding entropy (raw)
+        embeddings = np.array(data["embeddings"])
+        labels = np.array(data["is_register"])
+
+        # For embedding entropy, we'll use a simple logistic regression
+        # and look at the entropy of its predictions
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.model_selection import cross_val_predict
+
+        # Raw embeddings
+        clf = LogisticRegression(max_iter=1000)
+        preds_raw = cross_val_predict(
+            clf, embeddings, labels, cv=5, method="predict_proba"
+        )
+        embedding_entropy_raw = np.mean([binary_entropy(p[1]) for p in preds_raw])
+
+        # PCA embeddings
+        pca = PCA(n_components=10)
+        embeddings_pca = pca.fit_transform(embeddings)
+        preds_pca = cross_val_predict(
+            clf, embeddings_pca, labels, cv=5, method="predict_proba"
+        )
+        embedding_entropy_pca = np.mean([binary_entropy(p[1]) for p in preds_pca])
+
+        register_entropies[register] = (
+            label_entropy,
+            embedding_entropy_raw,
+            embedding_entropy_pca,
+        )
+
+    return register_entropies
+
+
 def compute_mutual_information(embeddings, labels):
     """
     Compute mutual information between embeddings and class labels.
@@ -319,6 +407,51 @@ def plot_comparative_variances(
     plt.close()
 
 
+def plot_entropy_comparison(doc_entropies, segment_entropies, output_path):
+    """Plot entropy comparisons between documents and segments."""
+    common_registers = sorted(set(doc_entropies.keys()) & set(segment_entropies.keys()))
+
+    if not common_registers:
+        print(
+            "No registers have enough data for both document and segment level analysis"
+        )
+        return
+
+    # Prepare data
+    doc_label_ent = [doc_entropies[r][0] for r in common_registers]
+    doc_emb_ent = [doc_entropies[r][2] for r in common_registers]  # Using PCA entropy
+    seg_label_ent = [segment_entropies[r][0] for r in common_registers]
+    seg_emb_ent = [segment_entropies[r][2] for r in common_registers]
+
+    # Create figure with two subplots
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+
+    # Plot label entropies
+    x = np.arange(len(common_registers))
+    width = 0.35
+
+    ax1.bar(x - width / 2, doc_label_ent, width, label="Document Level")
+    ax1.bar(x + width / 2, seg_label_ent, width, label="Segment Level")
+    ax1.set_ylabel("Label Entropy")
+    ax1.set_title("Label Entropy Comparison")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(common_registers, rotation=45)
+    ax1.legend()
+
+    # Plot embedding entropies
+    ax2.bar(x - width / 2, doc_emb_ent, width, label="Document Level")
+    ax2.bar(x + width / 2, seg_emb_ent, width, label="Segment Level")
+    ax2.set_ylabel("Embedding Entropy (PCA)")
+    ax2.set_title("Embedding Entropy Comparison")
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(common_registers, rotation=45)
+    ax2.legend()
+
+    plt.tight_layout()
+    plt.savefig(f"{output_path}_entropy_comparison.png")
+    plt.close()
+
+
 def plot_mi_comparison(doc_mi, segment_mi, output_path):
     """Plot comparative MI analysis."""
     common_registers = sorted(set(doc_mi.keys()) & set(segment_mi.keys()))
@@ -385,6 +518,30 @@ def main():
 
     print("Analyzing label frequencies...")
     analyze_label_frequencies(data)
+
+    # Compute entropies
+    print("\nComputing entropies...")
+    doc_entropies = compute_register_entropies(data, level="document")
+    seg_entropies = compute_register_entropies(data, level="segment")
+
+    print("\nDocument-level entropy analysis:")
+    for register in sorted(doc_entropies.keys()):
+        label_ent, emb_ent_raw, emb_ent_pca = doc_entropies[register]
+        print(f"{register}:")
+        print(f"  Label entropy: {label_ent:.4f}")
+        print(f"  Embedding entropy (raw): {emb_ent_raw:.4f}")
+        print(f"  Embedding entropy (PCA): {emb_ent_pca:.4f}")
+
+    print("\nSegment-level entropy analysis:")
+    for register in sorted(seg_entropies.keys()):
+        label_ent, emb_ent_raw, emb_ent_pca = seg_entropies[register]
+        print(f"{register}:")
+        print(f"  Label entropy: {label_ent:.4f}")
+        print(f"  Embedding entropy (raw): {emb_ent_raw:.4f}")
+        print(f"  Embedding entropy (PCA): {emb_ent_pca:.4f}")
+
+    # Create entropy comparison plot
+    plot_entropy_comparison(doc_entropies, seg_entropies, args.output)
 
     # Compute MI for documents and segments
     print("\nComputing mutual information...")

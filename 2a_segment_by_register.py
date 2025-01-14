@@ -20,7 +20,7 @@ class Segment:
 class RegisterSegmenter:
     def __init__(
         self,
-        min_segment_length: int = 300,
+        min_segment_length: int = 500,
         register_threshold: float = 0.4,
         batch_size: int = 32,
     ):
@@ -377,7 +377,7 @@ def format_segments(
 def process_file(
     input_path: str,
     output_path: str = None,
-    min_segment_length: int = 300,
+    min_segment_length: int = 500,
     register_threshold: float = 0.4,
     batch_size: int = 32,
     print_only: bool = False,
@@ -401,7 +401,7 @@ def process_file(
                 segments = segmenter.segment_recursively(text)
 
                 # Combine segments with same registers and re-predict
-                segments = segmenter.combine_segments(segments)
+                # segments = segmenter.combine_segments(segments)
 
                 if print_only:
                     print(

@@ -519,26 +519,18 @@ def main():
     print("Analyzing label frequencies...")
     analyze_label_frequencies(data)
 
-    # Compute entropies
-    print("\nComputing entropies...")
-    doc_entropies = compute_register_entropies(data, level="document")
-    seg_entropies = compute_register_entropies(data, level="segment")
+    # Compute prediction entropies
+    print("\nComputing prediction entropies...")
+    doc_entropies = compute_prediction_entropies(data, level="document")
+    seg_entropies = compute_prediction_entropies(data, level="segment")
 
-    print("\nDocument-level entropy analysis:")
+    print("\nDocument-level prediction entropy:")
     for register in sorted(doc_entropies.keys()):
-        label_ent, emb_ent_raw, emb_ent_pca = doc_entropies[register]
-        print(f"{register}:")
-        print(f"  Label entropy: {label_ent:.4f}")
-        print(f"  Embedding entropy (raw): {emb_ent_raw:.4f}")
-        print(f"  Embedding entropy (PCA): {emb_ent_pca:.4f}")
+        print(f"{register}: {doc_entropies[register]:.4f}")
 
-    print("\nSegment-level entropy analysis:")
+    print("\nSegment-level prediction entropy:")
     for register in sorted(seg_entropies.keys()):
-        label_ent, emb_ent_raw, emb_ent_pca = seg_entropies[register]
-        print(f"{register}:")
-        print(f"  Label entropy: {label_ent:.4f}")
-        print(f"  Embedding entropy (raw): {emb_ent_raw:.4f}")
-        print(f"  Embedding entropy (PCA): {emb_ent_pca:.4f}")
+        print(f"{register}: {seg_entropies[register]:.4f}")
 
     # Create entropy comparison plot
     plot_entropy_comparison(doc_entropies, seg_entropies, args.output)

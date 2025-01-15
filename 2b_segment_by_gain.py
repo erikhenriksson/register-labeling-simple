@@ -74,7 +74,7 @@ class TextSegmenter:
         # Normalize parent probabilities
         parent_probs = np.array(parent_probs) / np.sum(parent_probs)
         parent_focus = np.max(parent_probs)
-        print(f"Parent max probability: {parent_focus}")
+        # print(f"Parent max probability: {parent_focus}")
 
         # For each child, compute how much more focused its registers are
         child_gains = []
@@ -82,12 +82,12 @@ class TextSegmenter:
             child_probs = np.array(seg.register_probs)
             child_probs = child_probs / np.sum(child_probs)
             child_focus = np.max(child_probs)
-            print(f"Child max probability: {child_focus}")
+            # print(f"Child max probability: {child_focus}")
             child_gains.append(child_focus - parent_focus)
 
         avg_gain = np.mean(child_gains)
-        print(f"Average gain: {avg_gain}")
-        print("-" * 50)
+        # print(f"Average gain: {avg_gain}")
+        # print("-" * 50)
         return avg_gain
 
     def get_valid_segmentations(

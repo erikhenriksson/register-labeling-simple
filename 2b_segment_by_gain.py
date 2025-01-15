@@ -26,7 +26,7 @@ class Segment:
 
 
 class TextSegmenter:
-    def __init__(self, min_segment_length: int = 300, min_gain_threshold: float = 0.15):
+    def __init__(self, min_segment_length: int = 300, min_gain_threshold: float = 0.05):
         # Load spaCy for sentence splitting
         self.nlp = spacy.load("xx_ent_wiki_sm")
         if "sentencizer" not in self.nlp.pipe_names:
@@ -117,18 +117,31 @@ class TextSegmenter:
         Compute information gain from splitting a segment into subsegments.
         Uses both register probabilities and semantic cohesion.
         """
+        # Normalize probabilities to ensure they sum to 1 for entropy calculation
+        parent_probs = np.array(parent_segment.register_probs)
+        parent_probs = parent_probs / np.sum(parent_probs)
+
         # Compute entropy of parent register distribution
-        parent_entropy = entropy(parent_segment.register_probs)
+        parent_entropy = entropy(parent_probs)
+        print(f"Parent entropy: {parent_entropy}")
 
         # Weighted average entropy of children
         total_length = sum(len(seg.text) for seg in child_segments)
+        child_entropies = []
+        for seg in child_segments:
+            child_probs = np.array(seg.register_probs)
+            child_probs = child_probs / np.sum(child_probs)
+            child_entropies.append(entropy(child_probs))
+
         weighted_child_entropy = sum(
-            (len(seg.text) / total_length) * entropy(seg.register_probs)
-            for seg in child_segments
+            (len(seg.text) / total_length) * ent
+            for seg, ent in zip(child_segments, child_entropies)
         )
+        print(f"Weighted child entropy: {weighted_child_entropy}")
 
         # Information gain from register perspective
         register_gain = parent_entropy - weighted_child_entropy
+        print(f"Register gain: {register_gain}")
 
         # Compute semantic coherence improvement
         parent_cohesion = self.compute_segment_cohesion(
@@ -139,9 +152,12 @@ class TextSegmenter:
             for seg in child_segments
         ]
         cohesion_gain = np.mean(child_cohesions) - parent_cohesion
+        print(f"Cohesion gain: {cohesion_gain}")
 
         # Combine both metrics (70% register, 30% cohesion)
         total_gain = 0.7 * register_gain + 0.3 * cohesion_gain
+        print(f"Total gain: {total_gain}")
+        print("-" * 50)
 
         return total_gain
 

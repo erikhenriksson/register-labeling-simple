@@ -133,8 +133,21 @@ def analyze_registers(input_file, output_file, threshold=0.4):
 
     # 3. Register Co-occurrence
     plt.subplot(2, 2, 3)
-    doc_cooc = np.corrcoef(doc_labels.T)
-    seg_cooc = np.corrcoef(segment_labels.T)
+
+    # Handle correlation calculation with error checking
+    def safe_corrcoef(x):
+        # Check if we have any variation in the data
+        if x.shape[0] <= 1 or not np.any(np.std(x, axis=0) > 0):
+            return np.zeros((x.shape[1], x.shape[1]))
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            corr = np.corrcoef(x.T)
+            # Replace NaN values with 0
+            corr = np.nan_to_num(corr, nan=0.0)
+        return corr
+
+    doc_cooc = safe_corrcoef(doc_labels)
+    seg_cooc = safe_corrcoef(segment_labels)
 
     # Plot difference in co-occurrence
     diff_cooc = doc_cooc - seg_cooc
@@ -150,10 +163,21 @@ def analyze_registers(input_file, output_file, threshold=0.4):
     # 4. Segment Count vs Register Diversity
     plt.subplot(2, 2, 4)
     doc_diversity = np.sum(doc_labels, axis=1)
-    avg_seg_diversity = [
-        np.mean(np.sum(segment_labels[i : i + count], axis=1))
-        for i, count in enumerate(np.cumsum([0] + segment_counts[:-1]))
-    ]
+
+    # Calculate average segment diversity with error handling
+    avg_seg_diversity = []
+    cum_counts = np.cumsum([0] + segment_counts[:-1])
+    for i, count in enumerate(cum_counts):
+        if count >= len(segment_labels):
+            # Skip if we're out of bounds
+            avg_seg_diversity.append(0)
+            continue
+        end_idx = min(count + segment_counts[i], len(segment_labels))
+        segment_sums = np.sum(segment_labels[count:end_idx], axis=1)
+        if len(segment_sums) > 0:
+            avg_seg_diversity.append(np.mean(segment_sums))
+        else:
+            avg_seg_diversity.append(0)
 
     plt.scatter(segment_counts, doc_diversity, alpha=0.5, label="Document diversity")
     plt.scatter(

@@ -69,19 +69,19 @@ class TextSegmenter:
         """
         parent_probs = np.array(parent_probs) / np.sum(parent_probs)
         parent_focus = np.max(parent_probs)
-        print(f"Parent max probability: {parent_focus}")
+        # print(f"Parent max probability: {parent_focus}")
 
         child_gains = []
         for seg in child_segments:
             child_probs = np.array(seg.register_probs)
             child_probs = child_probs / np.sum(child_probs)
             child_focus = np.max(child_probs)
-            print(f"Child max probability: {child_focus}")
+            # print(f"Child max probability: {child_focus}")
             child_gains.append(child_focus - parent_focus)
 
         avg_gain = np.mean(child_gains)
-        print(f"Average gain: {avg_gain}")
-        print("-" * 50)
+        # print(f"Average gain: {avg_gain}")
+        # print("-" * 50)
         return avg_gain
 
     def get_valid_segmentations(self, sentences: List[str]) -> List[List[Segment]]:
@@ -255,7 +255,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--min-gain",
         type=float,
-        default=0.1,
+        default=0.0001,
         help="Minimum register probability gain threshold for splitting",
     )
     parser.add_argument(

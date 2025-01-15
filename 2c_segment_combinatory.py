@@ -213,12 +213,8 @@ class TextSegmenter:
                 if self.should_merge_segments(current_probs, best_probs[i]):
                     # Same register pattern, merge segments
                     current_segment += " " + best_segments[i]
-                    current_probs = [
-                        max(a, b) for a, b in zip(current_probs, best_probs[i])
-                    ]
-                    current_emb = [
-                        0.5 * (a + b) for a, b in zip(current_emb, best_embeddings[i])
-                    ]
+                    # Get new predictions for combined segment
+                    current_probs, current_emb = self.get_prediction(current_segment)
                 else:
                     # Different register pattern, add current and start new
                     final_segments.append(current_segment)

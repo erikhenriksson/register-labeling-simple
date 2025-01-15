@@ -110,37 +110,42 @@ class TextSegmenter:
         doc = self.nlp(text)
         return [sent.text.strip() for sent in doc.sents]
 
+    def compute_register_gain(
+        self, parent_probs: np.ndarray, child_segments: List[Segment]
+    ) -> float:
+        """
+        Compute register gain based on how focused each child segment becomes.
+        A segment is better if it has clearer dominant registers than its parent.
+        """
+        # Normalize parent probabilities
+        parent_probs = np.array(parent_probs) / np.sum(parent_probs)
+
+        # Get the highest register probability in parent
+        parent_focus = np.max(parent_probs)
+
+        # For each child, compute how much more focused its registers are
+        child_gains = []
+        for seg in child_segments:
+            child_probs = np.array(seg.register_probs)
+            child_probs = child_probs / np.sum(child_probs)
+            child_focus = np.max(child_probs)
+            # Gain is positive if child is more focused than parent
+            child_gains.append(child_focus - parent_focus)
+
+        # Average the gains across children
+        return np.mean(child_gains)
+
     def compute_information_gain(
         self, parent_segment: Segment, child_segments: List[Segment]
     ) -> float:
         """
         Compute information gain from splitting a segment into subsegments.
-        Uses both register probabilities and semantic cohesion.
+        Uses both register focus and semantic cohesion.
         """
-        # Normalize probabilities to ensure they sum to 1 for entropy calculation
-        parent_probs = np.array(parent_segment.register_probs)
-        parent_probs = parent_probs / np.sum(parent_probs)
-
-        # Compute entropy of parent register distribution
-        parent_entropy = entropy(parent_probs)
-        print(f"Parent entropy: {parent_entropy}")
-
-        # Weighted average entropy of children
-        total_length = sum(len(seg.text) for seg in child_segments)
-        child_entropies = []
-        for seg in child_segments:
-            child_probs = np.array(seg.register_probs)
-            child_probs = child_probs / np.sum(child_probs)
-            child_entropies.append(entropy(child_probs))
-
-        weighted_child_entropy = sum(
-            (len(seg.text) / total_length) * ent
-            for seg, ent in zip(child_segments, child_entropies)
+        # Compute how much more focused the registers become
+        register_gain = self.compute_register_gain(
+            parent_segment.register_probs, child_segments
         )
-        print(f"Weighted child entropy: {weighted_child_entropy}")
-
-        # Information gain from register perspective
-        register_gain = parent_entropy - weighted_child_entropy
         print(f"Register gain: {register_gain}")
 
         # Compute semantic coherence improvement
@@ -152,6 +157,18 @@ class TextSegmenter:
             for seg in child_segments
         ]
         cohesion_gain = np.mean(child_cohesions) - parent_cohesion
+        print(f"Cohesion gain: {cohesion_gain}")
+
+        # Combine both metrics (70% register, 30% cohesion)
+        total_gain = 0.7 * register_gain + 0.3 * cohesion_gain
+        print(f"Total gain: {total_gain}")
+        print("-" * 50)
+
+        return total_gain
+
+        # Scale the gains to be positive when desirable
+        register_gain = -register_gain  # Now positive when children have lower entropy
+        cohesion_gain = cohesion_gain  # Already positive when children more coherent
         print(f"Cohesion gain: {cohesion_gain}")
 
         # Combine both metrics (70% register, 30% cohesion)

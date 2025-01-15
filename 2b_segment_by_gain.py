@@ -5,9 +5,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import spacy
 import torch
-import torch.nn.functional as F
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from scipy.stats import entropy
 
 # Set environment variables for HuggingFace
 os.environ["HF_HOME"] = ".hf/hf_home"
@@ -21,68 +19,27 @@ class Segment:
     text: str
     start_idx: int
     end_idx: int
-    embedding: List[float]
     register_probs: List[float]
 
 
 class TextSegmenter:
-    def __init__(self, min_segment_length: int = 300, min_gain_threshold: float = 0.05):
+    def __init__(self, min_segment_length: int = 300, min_prob_gain: float = 0.1):
         # Load spaCy for sentence splitting
         self.nlp = spacy.load("xx_ent_wiki_sm")
         if "sentencizer" not in self.nlp.pipe_names:
             self.nlp.add_pipe("sentencizer")
 
         self.min_segment_length = min_segment_length
-        self.min_gain_threshold = min_gain_threshold
+        self.min_prob_gain = min_prob_gain
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
         self.tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-large")
         self.model = self.model.to(self.device)
         self.model.eval()
-        self.model.config.output_hidden_states = True
         self.id2label = self.model.config.id2label
 
-    def compute_l2_similarity(
-        self, embeddings1: np.ndarray, embeddings2: np.ndarray
-    ) -> float:
-        """
-        Compute similarity between two sets of embeddings using L2 distance.
-        Returns a similarity score between 0 and 1, where 1 means identical.
-        """
-        distances = np.zeros((len(embeddings1), len(embeddings2)))
-        for i in range(len(embeddings1)):
-            for j in range(len(embeddings2)):
-                l2_dist = np.linalg.norm(embeddings1[i] - embeddings2[j])
-                distances[i, j] = np.exp(-l2_dist)
-
-        return float(np.mean(distances))
-
-    def compute_segment_cohesion(self, embeddings: np.ndarray) -> float:
-        """Compute average L2-based similarity within a segment"""
-        if len(embeddings) < 2:
-            return 1.0
-
-        similarities = np.zeros((len(embeddings), len(embeddings)))
-        for i in range(len(embeddings)):
-            for j in range(i + 1, len(embeddings)):
-                l2_dist = np.linalg.norm(embeddings[i] - embeddings[j])
-                similarity = np.exp(-l2_dist)
-                similarities[i, j] = similarity
-                similarities[j, i] = similarity
-
-        mask = np.triu(np.ones_like(similarities), k=1).astype(bool)
-        return float(np.mean(similarities[mask]))
-
-    def compute_segment_dissimilarity(
-        self, embeddings1: np.ndarray, embeddings2: np.ndarray
-    ) -> float:
-        """Compute average L2-based dissimilarity between two segments"""
-        similarity = self.compute_l2_similarity(embeddings1, embeddings2)
-        return 1.0 - similarity
-
-    def precompute_embeddings(self, sentences: List[str]):
-        """Precompute embeddings for all sentences in batches"""
-        embeddings = []
+    def compute_register_probabilities(self, sentences: List[str]):
+        """Compute register probabilities for sentences in batches"""
         probs = []
         batch_size = 32
 
@@ -97,13 +54,10 @@ class TextSegmenter:
                     return_tensors="pt",
                 ).to(self.device)
                 outputs = self.model(**inputs)
-                batch_embeddings = outputs.hidden_states[-1][:, 0, :].cpu().numpy()
                 batch_probs = torch.sigmoid(outputs.logits).cpu().numpy()
-
-                embeddings.extend(batch_embeddings)
                 probs.extend(batch_probs)
 
-        return embeddings, probs
+        return probs
 
     def split_to_sentences(self, text: str) -> List[str]:
         """Split text into sentences using spaCy"""
@@ -115,13 +69,12 @@ class TextSegmenter:
     ) -> float:
         """
         Compute register gain based on how focused each child segment becomes.
-        A segment is better if it has clearer dominant registers than its parent.
+        Returns the average improvement in maximum register probability.
         """
         # Normalize parent probabilities
         parent_probs = np.array(parent_probs) / np.sum(parent_probs)
-
-        # Get the highest register probability in parent
         parent_focus = np.max(parent_probs)
+        print(f"Parent max probability: {parent_focus}")
 
         # For each child, compute how much more focused its registers are
         child_gains = []
@@ -129,77 +82,17 @@ class TextSegmenter:
             child_probs = np.array(seg.register_probs)
             child_probs = child_probs / np.sum(child_probs)
             child_focus = np.max(child_probs)
-            # Gain is positive if child is more focused than parent
+            print(f"Child max probability: {child_focus}")
             child_gains.append(child_focus - parent_focus)
 
-        # Average the gains across children
-        return np.mean(child_gains)
-
-    def compute_information_gain(
-        self, parent_segment: Segment, child_segments: List[Segment]
-    ) -> float:
-        """
-        Compute information gain from splitting a segment into subsegments.
-        Uses both register focus and semantic cohesion.
-        """
-        # Compute how much more focused the registers become
-        register_gain = self.compute_register_gain(
-            parent_segment.register_probs, child_segments
-        )
-        print(f"Register gain: {register_gain}")
-
-        # Compute semantic coherence improvement
-        parent_cohesion = self.compute_segment_cohesion(
-            np.array(parent_segment.embedding).reshape(1, -1)
-        )
-        child_cohesions = [
-            self.compute_segment_cohesion(np.array(seg.embedding).reshape(1, -1))
-            for seg in child_segments
-        ]
-        cohesion_gain = np.mean(child_cohesions) - parent_cohesion
-        print(f"Cohesion gain: {cohesion_gain}")
-
-        # Combine both metrics (70% register, 30% cohesion)
-        total_gain = 0.7 * register_gain + 0.3 * cohesion_gain
-        print(f"Total gain: {total_gain}")
+        avg_gain = np.mean(child_gains)
+        print(f"Average gain: {avg_gain}")
         print("-" * 50)
-
-        return total_gain
-
-        # Scale the gains to be positive when desirable
-        register_gain = -register_gain  # Now positive when children have lower entropy
-        cohesion_gain = cohesion_gain  # Already positive when children more coherent
-        print(f"Cohesion gain: {cohesion_gain}")
-
-        # Combine both metrics (70% register, 30% cohesion)
-        total_gain = 0.7 * register_gain + 0.3 * cohesion_gain
-        print(f"Total gain: {total_gain}")
-        print("-" * 50)
-
-        return total_gain
-
-    def should_split(
-        self, parent_segment: Segment, potential_splits: List[List[Segment]]
-    ) -> Tuple[bool, List[Segment]]:
-        """
-        Determine if splitting is beneficial based on information gain.
-        Returns (should_split, best_split)
-        """
-        best_gain = -float("inf")
-        best_split = None
-
-        for split in potential_splits:
-            gain = self.compute_information_gain(parent_segment, split)
-            if gain > best_gain:
-                best_gain = gain
-                best_split = split
-
-        return best_gain > self.min_gain_threshold, best_split
+        return avg_gain
 
     def get_valid_segmentations(
         self,
         sentences: List[str],
-        sentence_embeddings: List[np.ndarray],
         sentence_probs: List[np.ndarray],
     ) -> List[List[Segment]]:
         """Get all valid segmentations based on minimum length constraint"""
@@ -218,14 +111,12 @@ class TextSegmenter:
                     text=segment1,
                     start_idx=0,
                     end_idx=split_idx,
-                    embedding=np.mean(sentence_embeddings[:split_idx], axis=0).tolist(),
                     register_probs=np.mean(sentence_probs[:split_idx], axis=0).tolist(),
                 )
                 seg2 = Segment(
                     text=segment2,
                     start_idx=split_idx,
                     end_idx=total_sentences,
-                    embedding=np.mean(sentence_embeddings[split_idx:], axis=0).tolist(),
                     register_probs=np.mean(sentence_probs[split_idx:], axis=0).tolist(),
                 )
                 valid_segmentations.append([seg1, seg2])
@@ -233,45 +124,46 @@ class TextSegmenter:
         return valid_segmentations
 
     def segment_recursively(self, text: str) -> List[Segment]:
-        """Modified recursive segmentation with information gain criterion"""
+        """Recursively segment text based on register probability gains"""
         sentences = self.split_to_sentences(text)
         if len(sentences) < 2 or len(text) < self.min_segment_length * 2:
-            embedding, probs = self.precompute_embeddings([text])
+            probs = self.compute_register_probabilities([text])
             return [
                 Segment(
                     text=text,
                     start_idx=0,
                     end_idx=len(sentences),
-                    embedding=embedding[0].tolist(),
                     register_probs=probs[0].tolist(),
                 )
             ]
 
         # Create parent segment
-        parent_embedding, parent_probs = self.precompute_embeddings([text])
+        parent_probs = self.compute_register_probabilities([text])[0]
         parent_segment = Segment(
             text=text,
             start_idx=0,
             end_idx=len(sentences),
-            embedding=parent_embedding[0].tolist(),
-            register_probs=parent_probs[0].tolist(),
+            register_probs=parent_probs.tolist(),
         )
 
         # Get potential splits
-        sentence_embeddings, sentence_probs = self.precompute_embeddings(sentences)
-        valid_segmentations = self.get_valid_segmentations(
-            sentences, sentence_embeddings, sentence_probs
-        )
+        sentence_probs = self.compute_register_probabilities(sentences)
+        valid_segmentations = self.get_valid_segmentations(sentences, sentence_probs)
 
         if not valid_segmentations:
             return [parent_segment]
 
-        # Check if we should split based on information gain
-        should_split, best_split = self.should_split(
-            parent_segment, valid_segmentations
-        )
+        # Find best segmentation based on register probability gain
+        best_gain = -float("inf")
+        best_split = None
+        for split in valid_segmentations:
+            gain = self.compute_register_gain(parent_probs, split)
+            if gain > best_gain:
+                best_gain = gain
+                best_split = split
 
-        if not should_split:
+        # Only split if the gain exceeds our threshold
+        if best_gain < self.min_prob_gain:
             return [parent_segment]
 
         # Recursively split each segment in the best split
@@ -312,12 +204,12 @@ def process_file(
     input_path: str,
     output_path: str = None,
     min_segment_length: int = 300,
-    min_gain_threshold: float = 0.15,
+    min_prob_gain: float = 0.1,
     print_only: bool = False,
 ):
     """Process input JSONL file and write segmented output."""
     segmenter = TextSegmenter(
-        min_segment_length=min_segment_length, min_gain_threshold=min_gain_threshold
+        min_segment_length=min_segment_length, min_prob_gain=min_prob_gain
     )
 
     with open(input_path, "r", encoding="utf-8") as fin:
@@ -340,7 +232,6 @@ def process_file(
                         "register_probabilities": [
                             seg.register_probs for seg in segments
                         ],
-                        "embeddings": [seg.embedding for seg in segments],
                     }
                     fout.write(json.dumps(data, ensure_ascii=False) + "\n")
                     fout.flush()
@@ -366,8 +257,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--min-gain",
         type=float,
-        default=0.15,
-        help="Minimum information gain threshold for splitting",
+        default=0.0,
+        help="Minimum register probability gain threshold for splitting",
     )
     parser.add_argument(
         "--print-only",

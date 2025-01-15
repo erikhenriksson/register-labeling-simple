@@ -40,6 +40,8 @@ class TextSegmenter:
         if "sentencizer" not in self.nlp.pipe_names:
             self.nlp.add_pipe("sentencizer")
 
+        print("Model labels:", self.model.config.id2label)
+
     def split_into_sentences(self, text: str) -> List[str]:
         """Split text into sentences using spaCy."""
         doc = self.nlp(text)

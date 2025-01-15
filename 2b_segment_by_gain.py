@@ -20,6 +20,7 @@ class Segment:
     start_idx: int
     end_idx: int
     register_probs: List[float]
+    embedding: List[float]
 
 
 class TextSegmenter:
@@ -36,28 +37,23 @@ class TextSegmenter:
         self.tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-large")
         self.model = self.model.to(self.device)
         self.model.eval()
+        self.model.config.output_hidden_states = True
         self.id2label = self.model.config.id2label
 
-    def compute_register_probabilities(self, sentences: List[str]):
-        """Compute register probabilities for sentences in batches"""
-        probs = []
-        batch_size = 32
-
-        for i in range(0, len(sentences), batch_size):
-            batch = sentences[i : i + batch_size]
-            with torch.no_grad():
-                inputs = self.tokenizer(
-                    batch,
-                    padding=True,
-                    truncation=True,
-                    max_length=2048,
-                    return_tensors="pt",
-                ).to(self.device)
-                outputs = self.model(**inputs)
-                batch_probs = torch.sigmoid(outputs.logits).cpu().numpy()
-                probs.extend(batch_probs)
-
-        return probs
+    def compute_embeddings_and_probs(self, text: str):
+        """Compute embeddings and register probabilities for a complete text segment"""
+        with torch.no_grad():
+            inputs = self.tokenizer(
+                text,
+                padding=True,
+                truncation=True,
+                max_length=2048,
+                return_tensors="pt",
+            ).to(self.device)
+            outputs = self.model(**inputs)
+            embedding = outputs.hidden_states[-1][:, 0, :].cpu().numpy()[0]
+            probs = torch.sigmoid(outputs.logits).cpu().numpy()[0]
+            return embedding, probs
 
     def split_to_sentences(self, text: str) -> List[str]:
         """Split text into sentences using spaCy"""
@@ -71,30 +67,24 @@ class TextSegmenter:
         Compute register gain based on how focused each child segment becomes.
         Returns the average improvement in maximum register probability.
         """
-        # Normalize parent probabilities
         parent_probs = np.array(parent_probs) / np.sum(parent_probs)
         parent_focus = np.max(parent_probs)
-        # print(f"Parent max probability: {parent_focus}")
+        print(f"Parent max probability: {parent_focus}")
 
-        # For each child, compute how much more focused its registers are
         child_gains = []
         for seg in child_segments:
             child_probs = np.array(seg.register_probs)
             child_probs = child_probs / np.sum(child_probs)
             child_focus = np.max(child_probs)
-            # print(f"Child max probability: {child_focus}")
+            print(f"Child max probability: {child_focus}")
             child_gains.append(child_focus - parent_focus)
 
         avg_gain = np.mean(child_gains)
-        # print(f"Average gain: {avg_gain}")
-        # print("-" * 50)
+        print(f"Average gain: {avg_gain}")
+        print("-" * 50)
         return avg_gain
 
-    def get_valid_segmentations(
-        self,
-        sentences: List[str],
-        sentence_probs: List[np.ndarray],
-    ) -> List[List[Segment]]:
+    def get_valid_segmentations(self, sentences: List[str]) -> List[List[Segment]]:
         """Get all valid segmentations based on minimum length constraint"""
         valid_segmentations = []
         total_sentences = len(sentences)
@@ -107,17 +97,23 @@ class TextSegmenter:
                 len(segment1) >= self.min_segment_length
                 and len(segment2) >= self.min_segment_length
             ):
+                # Compute embeddings and probabilities for each complete segment
+                emb1, probs1 = self.compute_embeddings_and_probs(segment1)
+                emb2, probs2 = self.compute_embeddings_and_probs(segment2)
+
                 seg1 = Segment(
                     text=segment1,
                     start_idx=0,
                     end_idx=split_idx,
-                    register_probs=np.mean(sentence_probs[:split_idx], axis=0).tolist(),
+                    register_probs=probs1.tolist(),
+                    embedding=emb1.tolist(),
                 )
                 seg2 = Segment(
                     text=segment2,
                     start_idx=split_idx,
                     end_idx=total_sentences,
-                    register_probs=np.mean(sentence_probs[split_idx:], axis=0).tolist(),
+                    register_probs=probs2.tolist(),
+                    embedding=emb2.tolist(),
                 )
                 valid_segmentations.append([seg1, seg2])
 
@@ -127,28 +123,29 @@ class TextSegmenter:
         """Recursively segment text based on register probability gains"""
         sentences = self.split_to_sentences(text)
         if len(sentences) < 2 or len(text) < self.min_segment_length * 2:
-            probs = self.compute_register_probabilities([text])
+            embedding, probs = self.compute_embeddings_and_probs(text)
             return [
                 Segment(
                     text=text,
                     start_idx=0,
                     end_idx=len(sentences),
-                    register_probs=probs[0].tolist(),
+                    register_probs=probs.tolist(),
+                    embedding=embedding.tolist(),
                 )
             ]
 
-        # Create parent segment
-        parent_probs = self.compute_register_probabilities([text])[0]
+        # Get parent segment embeddings and probabilities
+        parent_embedding, parent_probs = self.compute_embeddings_and_probs(text)
         parent_segment = Segment(
             text=text,
             start_idx=0,
             end_idx=len(sentences),
             register_probs=parent_probs.tolist(),
+            embedding=parent_embedding.tolist(),
         )
 
         # Get potential splits
-        sentence_probs = self.compute_register_probabilities(sentences)
-        valid_segmentations = self.get_valid_segmentations(sentences, sentence_probs)
+        valid_segmentations = self.get_valid_segmentations(sentences)
 
         if not valid_segmentations:
             return [parent_segment]
@@ -232,6 +229,7 @@ def process_file(
                         "register_probabilities": [
                             seg.register_probs for seg in segments
                         ],
+                        "embeddings": [seg.embedding for seg in segments],
                     }
                     fout.write(json.dumps(data, ensure_ascii=False) + "\n")
                     fout.flush()
@@ -257,7 +255,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--min-gain",
         type=float,
-        default=0.0,
+        default=0.1,
         help="Minimum register probability gain threshold for splitting",
     )
     parser.add_argument(

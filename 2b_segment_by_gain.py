@@ -7,7 +7,7 @@ import spacy
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from scipy.stats import entropy, jensenshannon
+from scipy.stats import entropy
 
 # Set environment variables for HuggingFace
 os.environ["HF_HOME"] = ".hf/hf_home"

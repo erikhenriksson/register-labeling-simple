@@ -7,7 +7,6 @@ import torch.nn.functional as F
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import spacy
 from tqdm import tqdm
-import numpy as np
 
 # Set environment variables
 os.environ["HF_HOME"] = ".hf/hf_home"
@@ -16,10 +15,16 @@ os.environ["XDG_CACHE_HOME"] = ".hf/xdg_cache_home"
 
 class TextSegmenter:
     def __init__(
-        self, model_path: str, min_segment_chars: int = 300, prob_threshold: float = 0.5
+        self,
+        model_path: str,
+        prob_threshold: float = 0.5,
+        initial_min_words: int = 15,
+        max_groups: int = 20,
     ):
-        self.min_segment_chars = min_segment_chars
         self.prob_threshold = prob_threshold
+        self.initial_min_words = initial_min_words
+        self.max_groups = max_groups
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
 
@@ -40,6 +45,54 @@ class TextSegmenter:
         doc = self.nlp(text)
         return [str(sent).strip() for sent in doc.sents if str(sent).strip()]
 
+    def combine_short_sentences(self, sentences: List[str]) -> List[str]:
+        """Combine sentences into larger blocks until we have at most max_groups blocks."""
+        min_words = self.initial_min_words
+
+        def count_words(sentence):
+            return len(sentence.split())
+
+        while True:
+            result = []
+            buffer = ""
+
+            for i, sentence in enumerate(sentences):
+                if count_words(sentence) >= min_words:
+                    if buffer:
+                        result.append(buffer.strip())
+                        buffer = ""
+                    result.append(sentence)
+                else:
+                    buffer += (buffer and " ") + sentence
+
+                    # If the buffer reaches min_words, finalize it
+                    if count_words(buffer) >= min_words:
+                        result.append(buffer.strip())
+                        buffer = ""
+
+            # Handle leftover buffer
+            if buffer:
+                result.append(buffer.strip())
+
+            # Final pass: Ensure no sentences in the result are below min_words
+            i = 0
+            while i < len(result):
+                if count_words(result[i]) < min_words:
+                    if i < len(result) - 1:  # Merge with the next sentence
+                        result[i + 1] = result[i] + " " + result[i + 1]
+                        result.pop(i)
+                    elif i > 0:  # Merge with the previous sentence if it's the last one
+                        result[i - 1] += " " + result[i]
+                        result.pop(i)
+                    else:  # Single short sentence case
+                        break
+                else:
+                    i += 1
+
+            if len(result) <= self.max_groups:
+                return result
+            min_words += 1
+
     def get_prediction(self, text: str) -> Tuple[List[float], List[float]]:
         """Get register probabilities and embedding for a text segment."""
         inputs = self.tokenizer(
@@ -54,69 +107,19 @@ class TextSegmenter:
 
         return ([round(float(p), 3) for p in probs], [float(x) for x in embedding])
 
-    def get_valid_breakpoints(self, sentences: List[str]) -> List[List[int]]:
-        """Generate valid segmentations respecting minimum segment length."""
-        n = len(sentences)
-        valid_breakpoints = []
-
-        # Helper function to check segment lengths
-        def is_valid_segmentation(breaks: List[int]) -> bool:
-            start = 0
-            breaks = breaks + [n]
-
-            for end in breaks:
-                segment = " ".join(sentences[start:end])
-                if len(segment) < self.min_segment_chars:
-                    return False
-                start = end
-            return True
-
-        # Generate and filter valid breakpoint combinations
-        for k in range(n):
-            for breakpoints in combinations(range(1, n), k):
-                if is_valid_segmentation(list(breakpoints)):
-                    valid_breakpoints.append(list(breakpoints))
-
-        return valid_breakpoints
+    def get_all_breakpoint_combinations(self, n_blocks: int) -> List[List[int]]:
+        """Generate all possible breakpoint combinations."""
+        all_breakpoints = []
+        for k in range(n_blocks):
+            for breakpoints in combinations(range(1, n_blocks), k):
+                all_breakpoints.append(list(breakpoints))
+        return all_breakpoints
 
     def should_merge_segments(self, probs1: List[float], probs2: List[float]) -> bool:
         """Determine if segments should be merged based on multi-label predictions."""
-        # Convert probabilities to binary labels using threshold
         labels1 = [1 if p >= self.prob_threshold else 0 for p in probs1]
         labels2 = [1 if p >= self.prob_threshold else 0 for p in probs2]
-
-        # Compare binary label vectors
         return labels1 == labels2
-
-    def evaluate_segmentation(
-        self, sentences: List[str], breakpoints: List[int], cache: Dict[str, tuple]
-    ) -> Tuple[float, List[str], List[List[float]], List[List[float]]]:
-        """Evaluate a segmentation and return score, segments, probabilities, and embeddings."""
-        segments = []
-        start = 0
-        probs_list = []
-        emb_list = []
-        total_score = 0
-
-        breakpoints = breakpoints + [len(sentences)]
-
-        for end in breakpoints:
-            segment = " ".join(sentences[start:end])
-
-            if segment in cache:
-                probs, emb = cache[segment]
-            else:
-                probs, emb = self.get_prediction(segment)
-                cache[segment] = (probs, emb)
-
-            segments.append(segment)
-            probs_list.append(probs)
-            emb_list.append(emb)
-            total_score += sum(p for p in probs if p >= self.prob_threshold)
-
-            start = end
-
-        return total_score, segments, probs_list, emb_list
 
     def get_active_registers(self, probs: List[float]) -> List[str]:
         """Get list of active registers based on probability threshold."""
@@ -135,21 +138,59 @@ class TextSegmenter:
             print(f"Text: {segment[:100]}...")  # Print first 100 chars
             print("---")
 
+    def evaluate_segmentation(
+        self, blocks: List[str], breakpoints: List[int], cache: Dict[str, tuple]
+    ) -> Tuple[float, List[str], List[List[float]], List[List[float]]]:
+        """Evaluate a segmentation and return score, segments, probabilities, and embeddings."""
+        segments = []
+        start = 0
+        probs_list = []
+        emb_list = []
+        total_score = 0
+
+        breakpoints = breakpoints + [len(blocks)]
+
+        for end in breakpoints:
+            segment = " ".join(blocks[start:end])
+
+            if segment in cache:
+                probs, emb = cache[segment]
+            else:
+                probs, emb = self.get_prediction(segment)
+                cache[segment] = (probs, emb)
+
+            segments.append(segment)
+            probs_list.append(probs)
+            emb_list.append(emb)
+            total_score += sum(p for p in probs if p >= self.prob_threshold)
+
+            start = end
+
+        return total_score, segments, probs_list, emb_list
+
     def process_document(self, text: str) -> Dict:
         """Process a single document and find optimal segmentation."""
+        # First split into sentences
         sentences = self.split_into_sentences(text)
+
+        # Combine into larger blocks
+        blocks = self.combine_short_sentences(sentences)
+        print(f"\nNumber of blocks after combining: {len(blocks)}")
+
+        # Generate all possible breakpoint combinations
+        breakpoint_combinations = self.get_all_breakpoint_combinations(len(blocks))
+        print(f"Number of possible segmentations: {len(breakpoint_combinations)}")
+
+        # Find best segmentation
         prediction_cache = {}
-
-        valid_segmentations = self.get_valid_breakpoints(sentences)
-
         best_score = -1
         best_segments = []
         best_probs = []
         best_embeddings = []
 
-        for breakpoints in valid_segmentations:
+        for breakpoints in breakpoint_combinations:
             score, segments, probs, embs = self.evaluate_segmentation(
-                sentences, breakpoints, prediction_cache
+                blocks, breakpoints, prediction_cache
             )
 
             if score > best_score:
@@ -172,11 +213,9 @@ class TextSegmenter:
                 if self.should_merge_segments(current_probs, best_probs[i]):
                     # Same register pattern, merge segments
                     current_segment += " " + best_segments[i]
-                    # Update probabilities and embeddings (take max of probabilities)
                     current_probs = [
                         max(a, b) for a, b in zip(current_probs, best_probs[i])
                     ]
-                    # For embeddings, we could take mean or keep the first one
                     current_emb = [
                         0.5 * (a + b) for a, b in zip(current_emb, best_embeddings[i])
                     ]
@@ -220,8 +259,9 @@ def main():
     # Initialize segmenter
     segmenter = TextSegmenter(
         model_path="/scratch/project_2011770/bge-2048",
-        min_segment_chars=300,
         prob_threshold=0.5,
+        initial_min_words=15,
+        max_groups=20,
     )
 
     # Process file

@@ -173,7 +173,7 @@ class TextSegmenter:
             segments.append(segment)
             probs_list.append(probs)
             emb_list.append(emb)
-            total_score += max(probs)  # Use maximum probability as segment score
+            total_score = sum(max(probs) for probs) / len(segments)  # Use maximum probability as segment score
 
             start = end
 

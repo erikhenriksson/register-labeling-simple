@@ -7,6 +7,8 @@ import argparse
 from collections import Counter
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.preprocessing import LabelEncoder
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_predict
 
 # Label structure as provided
 labels_structure = {
@@ -34,6 +36,53 @@ def get_parent_indices(label_structure):
             child_idx = labels_all.index(child)
             parent_map[child_idx] = parent_idx
     return parent_map
+
+
+def process_probabilities(probs, threshold=0.4):
+    """Convert probabilities to labels considering hierarchy"""
+    parent_indices = get_parent_indices(labels_structure)
+    labels = (np.array(probs) > threshold).astype(int)
+
+    # Zero out parent when child is active
+    for child_idx, parent_idx in parent_indices.items():
+        if labels[child_idx] == 1:
+            labels[parent_idx] = 0
+    return labels
+
+
+def get_register_label(probs, threshold=0.4):
+    """Get single register label from probabilities"""
+    labels = process_probabilities(probs, threshold)
+    active_indices = np.where(labels == 1)[0]
+    if len(active_indices) == 1:
+        return labels_all[active_indices[0]]
+    return None
+
+
+def get_valid_registers(data, min_samples=10, level="document"):
+    """Helper function to get registers with sufficient samples"""
+    register_counts = defaultdict(int)
+
+    for item in data:
+        if level == "document":
+            probs = item["register_probabilities"]
+            register = get_register_label(probs)
+            if register:
+                register_counts[register] += 1
+        else:  # segment level
+            for probs in item["segmentation"]["register_probabilities"]:
+                register = get_register_label(probs)
+                if register:
+                    register_counts[register] += 1
+
+    return {reg for reg, count in register_counts.items() if count >= min_samples}
+
+
+def binary_entropy(p):
+    """Compute binary entropy."""
+    if p == 0 or p == 1:
+        return 0
+    return -(p * np.log2(p) + (1 - p) * np.log2(1 - p))
 
 
 def analyze_label_frequencies(data):
@@ -97,38 +146,9 @@ def analyze_label_frequencies(data):
         print(f"{label}: {seg_freq[label]}")
 
 
-def process_probabilities(probs, threshold=0.4):
-    """Convert probabilities to labels considering hierarchy"""
-    parent_indices = get_parent_indices(labels_structure)
-    labels = (np.array(probs) > threshold).astype(int)
-
-    # Zero out parent when child is active
-    for child_idx, parent_idx in parent_indices.items():
-        if labels[child_idx] == 1:
-            labels[parent_idx] = 0
-    return labels
-
-
-def get_register_label(probs, threshold=0.4):
-    """Get single register label from probabilities"""
-    labels = process_probabilities(probs, threshold)
-    active_indices = np.where(labels == 1)[0]
-    if len(active_indices) == 1:
-        return labels_all[active_indices[0]]
-    return None
-
-
-def binary_entropy(p):
-    """Compute binary entropy."""
-    if p == 0 or p == 1:
-        return 0
-    return -(p * np.log2(p) + (1 - p) * np.log2(1 - p))
-
-
 def compute_register_entropies(data, level="document"):
     """
     Compute label entropy and embedding entropy for each register.
-
     Returns:
         dict: Register -> (label_entropy, embedding_entropy_raw, embedding_entropy_pca)
     """
@@ -177,13 +197,10 @@ def compute_register_entropies(data, level="document"):
         embeddings = np.array(data["embeddings"])
         labels = np.array(data["is_register"])
 
-        # For embedding entropy, we'll use a simple logistic regression
-        # and look at the entropy of its predictions
-        from sklearn.linear_model import LogisticRegression
-        from sklearn.model_selection import cross_val_predict
+        # For embedding entropy, we'll use logistic regression
+        clf = LogisticRegression(max_iter=1000)
 
         # Raw embeddings
-        clf = LogisticRegression(max_iter=1000)
         preds_raw = cross_val_predict(
             clf, embeddings, labels, cv=5, method="predict_proba"
         )
@@ -209,14 +226,6 @@ def compute_register_entropies(data, level="document"):
 def compute_mutual_information(embeddings, labels):
     """
     Compute mutual information between embeddings and class labels.
-
-    Args:
-        embeddings: np.array of shape (n_samples, n_features)
-        labels: list of string labels
-
-    Returns:
-        float: average MI across features
-        np.array: MI for each feature
     """
     # Convert string labels to integers
     le = LabelEncoder()
@@ -289,20 +298,22 @@ def analyze_embeddings(
     return register_variances, register_lengths
 
 
-def analyze_embeddings_with_mi(data, level="document", min_samples=10):
+def analyze_embeddings_with_mi(data, level="document", valid_registers=None):
     """
     Analyze embeddings using mutual information at document or segment level.
+    valid_registers: if provided, only use these registers for analysis
     """
     register_embeddings = defaultdict(list)
     all_embeddings = []
     all_labels = []
 
+    # Collect data
     for item in data:
         if level == "document":
             probs = item["register_probabilities"]
             emb = item["embedding"]
             register = get_register_label(probs)
-            if register:
+            if register and (valid_registers is None or register in valid_registers):
                 register_embeddings[register].append(emb)
                 all_embeddings.append(emb)
                 all_labels.append(register)
@@ -312,55 +323,73 @@ def analyze_embeddings_with_mi(data, level="document", min_samples=10):
                 item["segmentation"]["embeddings"],
             ):
                 register = get_register_label(probs)
-                if register:
+                if register and (
+                    valid_registers is None or register in valid_registers
+                ):
                     register_embeddings[register].append(emb)
                     all_embeddings.append(emb)
                     all_labels.append(register)
 
-    # Only keep registers with enough samples
-    valid_registers = {
-        k for k, v in register_embeddings.items() if len(v) >= min_samples
-    }
-
-    # Filter data to only include valid registers
-    filtered_embeddings = []
-    filtered_labels = []
-    for emb, label in zip(all_embeddings, all_labels):
-        if label in valid_registers:
-            filtered_embeddings.append(emb)
-            filtered_labels.append(label)
-
-    if not filtered_embeddings:
+    if not all_embeddings:
         return None, None, {}
 
     # Convert to numpy array
-    embeddings_array = np.array(filtered_embeddings)
+    embeddings_array = np.array(all_embeddings)
 
     # Compute MI on raw embeddings
-    mi_raw, mi_scores_raw = compute_mutual_information(
-        embeddings_array, filtered_labels
-    )
+    mi_raw, mi_scores_raw = compute_mutual_information(embeddings_array, all_labels)
 
     # Compute MI on PCA components
     pca = PCA(n_components=10)
     pca_result = pca.fit_transform(embeddings_array)
-    mi_pca, mi_scores_pca = compute_mutual_information(pca_result, filtered_labels)
+    mi_pca, mi_scores_pca = compute_mutual_information(pca_result, all_labels)
 
     # Compute per-register MI
     register_mi = {}
-    for register in valid_registers:
-        register_mask = np.array(filtered_labels) == register
-        register_embeddings = embeddings_array[register_mask]
-        others_embeddings = embeddings_array[~register_mask]
-
-        # Create binary labels for one-vs-rest MI computation
+    for register in register_embeddings.keys():
+        register_mask = np.array(all_labels) == register
         binary_labels = [
-            "positive" if r == register else "negative" for r in filtered_labels
+            "positive" if r == register else "negative" for r in all_labels
         ]
         mi_score, _ = compute_mutual_information(embeddings_array, binary_labels)
         register_mi[register] = mi_score
 
     return mi_raw, mi_pca, register_mi
+
+
+def compute_prediction_entropies(data, level="document"):
+    """
+    Compute average entropy of predictions for each register.
+    """
+    register_entropies = {}
+
+    for item in data:
+        if level == "document":
+            probs = item["register_probabilities"]
+            register = get_register_label(probs)
+            if register:
+                # Get binary entropy for each register prediction
+                for reg_idx, reg_prob in enumerate(probs):
+                    reg_name = labels_all[reg_idx]
+                    if reg_name not in register_entropies:
+                        register_entropies[reg_name] = []
+                    register_entropies[reg_name].append(binary_entropy(reg_prob))
+        else:  # segment level
+            for probs in item["segmentation"]["register_probabilities"]:
+                register = get_register_label(probs)
+                if register:
+                    for reg_idx, reg_prob in enumerate(probs):
+                        reg_name = labels_all[reg_idx]
+                        if reg_name not in register_entropies:
+                            register_entropies[reg_name] = []
+                        register_entropies[reg_name].append(binary_entropy(reg_prob))
+
+    # Compute average entropy for each register
+    return {
+        reg: np.mean(entropies)
+        for reg, entropies in register_entropies.items()
+        if len(entropies) >= 10
+    }  # Only return registers with enough samples
 
 
 def plot_comparative_variances(
@@ -376,7 +405,6 @@ def plot_comparative_variances(
         return
 
     fig, ax = plt.subplots(figsize=(12, 6))
-
     x = np.arange(len(common_registers))
     width = 0.35
 
@@ -484,41 +512,6 @@ def plot_mi_comparison(doc_mi, segment_mi, output_path):
     plt.close()
 
 
-def compute_prediction_entropies(data, level="document"):
-    """
-    Compute average entropy of predictions for each register.
-    """
-    register_entropies = {}
-
-    for item in data:
-        if level == "document":
-            probs = item["register_probabilities"]
-            register = get_register_label(probs)
-            if register:
-                # Get binary entropy for each register prediction
-                for reg_idx, reg_prob in enumerate(probs):
-                    reg_name = labels_all[reg_idx]
-                    if reg_name not in register_entropies:
-                        register_entropies[reg_name] = []
-                    register_entropies[reg_name].append(binary_entropy(reg_prob))
-        else:  # segment level
-            for probs in item["segmentation"]["register_probabilities"]:
-                register = get_register_label(probs)
-                if register:
-                    for reg_idx, reg_prob in enumerate(probs):
-                        reg_name = labels_all[reg_idx]
-                        if reg_name not in register_entropies:
-                            register_entropies[reg_name] = []
-                        register_entropies[reg_name].append(binary_entropy(reg_prob))
-
-    # Compute average entropy for each register
-    return {
-        reg: np.mean(entropies)
-        for reg, entropies in register_entropies.items()
-        if len(entropies) >= 10
-    }  # Only return registers with enough samples
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Analyze register embeddings from JSONL files"
@@ -564,13 +557,19 @@ def main():
     # Create entropy comparison plot
     plot_entropy_comparison(doc_entropies, seg_entropies, args.output)
 
-    # Compute MI for documents and segments
-    print("\nComputing mutual information...")
+    # First find common valid registers for MI analysis
+    doc_valid = get_valid_registers(data, min_samples=10, level="document")
+    seg_valid = get_valid_registers(data, min_samples=10, level="segment")
+    common_registers = doc_valid & seg_valid
+
+    print("\nFound common registers for MI analysis:", sorted(common_registers))
+
+    # Compute MI using only common registers
     doc_mi_raw, doc_mi_pca, doc_mi_per_register = analyze_embeddings_with_mi(
-        data, level="document"
+        data, level="document", valid_registers=common_registers
     )
     seg_mi_raw, seg_mi_pca, seg_mi_per_register = analyze_embeddings_with_mi(
-        data, level="segment"
+        data, level="segment", valid_registers=common_registers
     )
 
     print("\nDocument-level MI analysis:")
@@ -590,7 +589,8 @@ def main():
     # Create comparative MI plot
     plot_mi_comparison(doc_mi_per_register, seg_mi_per_register, args.output)
 
-    # Also run the original variance analysis
+    # Run the variance analysis
+    print("\nComputing embedding variances...")
     doc_variances, doc_lengths = analyze_embeddings(
         data, level="document", normalize_by_length=False
     )

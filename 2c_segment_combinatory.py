@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import spacy
 from tqdm import tqdm
+import numpy as np
 
 # Set environment variables
 os.environ["HF_HOME"] = ".hf/hf_home"
@@ -173,9 +174,9 @@ class TextSegmenter:
             segments.append(segment)
             probs_list.append(probs)
             emb_list.append(emb)
-            total_score = total_score / len(
-                breakpoints + [len(blocks)]
-            )  # Use maximum probability as segment score
+            # Calculate geometric mean
+            all_max_probs = [max(probs_list[i]) for i in range(len(probs_list))]
+            total_score = np.exp(np.mean(np.log(all_max_probs)))
 
             start = end
 

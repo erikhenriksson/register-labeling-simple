@@ -7,7 +7,6 @@ import torch.nn.functional as F
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import spacy
 from tqdm import tqdm
-import numpy as np
 
 # Set environment variables
 os.environ["HF_HOME"] = ".hf/hf_home"
@@ -19,38 +18,27 @@ class TextSegmenter:
         self,
         model_path: str,
         prob_threshold: float = 0.5,
-        initial_min_words: int = 15,
+        initial_min_chars: int = 300,
         max_groups: int = 20,
     ):
-        print("Initializing TextSegmenter...")
         self.prob_threshold = prob_threshold
-        self.initial_min_words = initial_min_words
+        self.initial_min_chars = initial_min_chars
         self.max_groups = max_groups
 
-        print("Setting up device...")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
 
         # Load model and tokenizer
-        print("Loading tokenizer...")
-        self.tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-large")
-
-        print(f"Loading model from {model_path}...")
         self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
-        print("Moving model to device...")
+        self.tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-large")
         self.model = self.model.to(self.device)
-        print("Setting model to eval mode...")
         self.model.eval()
         self.model.config.output_hidden_states = True
 
-        # Load spaCy
-        print("Loading spaCy model...")
+        # Load spaCy for sentence splitting
         self.nlp = spacy.load("xx_ent_wiki_sm")
         if "sentencizer" not in self.nlp.pipe_names:
-            print("Adding sentencizer to spaCy pipeline...")
             self.nlp.add_pipe("sentencizer")
-
-        print("Initialization complete.")
 
     def split_into_sentences(self, text: str) -> List[str]:
         """Split text into sentences using spaCy."""
@@ -59,17 +47,14 @@ class TextSegmenter:
 
     def combine_short_sentences(self, sentences: List[str]) -> List[str]:
         """Combine sentences into larger blocks until we have at most max_groups blocks."""
-        min_words = self.initial_min_words
-
-        def count_words(sentence):
-            return len(sentence.split())
+        min_chars = self.initial_min_chars
 
         while True:
             result = []
             buffer = ""
 
             for i, sentence in enumerate(sentences):
-                if count_words(sentence) >= min_words:
+                if len(sentence) >= min_chars:
                     if buffer:
                         result.append(buffer.strip())
                         buffer = ""
@@ -77,55 +62,103 @@ class TextSegmenter:
                 else:
                     buffer += (buffer and " ") + sentence
 
-                    # If the buffer reaches min_words, finalize it
-                    if count_words(buffer) >= min_words:
+                    if len(buffer) >= min_chars:
                         result.append(buffer.strip())
                         buffer = ""
 
-            # Handle leftover buffer
             if buffer:
                 result.append(buffer.strip())
 
-            # Final pass: Ensure no sentences in the result are below min_words
             i = 0
             while i < len(result):
-                if count_words(result[i]) < min_words:
-                    if i < len(result) - 1:  # Merge with the next sentence
+                if len(result[i]) < min_chars:
+                    if i < len(result) - 1:
                         result[i + 1] = result[i] + " " + result[i + 1]
                         result.pop(i)
-                    elif i > 0:  # Merge with the previous sentence if it's the last one
+                    elif i > 0:
                         result[i - 1] += " " + result[i]
                         result.pop(i)
-                    else:  # Single short sentence case
+                    else:
                         break
                 else:
                     i += 1
 
             if len(result) <= self.max_groups:
                 return result
-            min_words += 1
+            min_chars += 1
 
-    def get_prediction(self, text: str) -> Tuple[List[float], List[float]]:
-        """Get register probabilities and embedding for a text segment."""
-        inputs = self.tokenizer(
-            text, padding=True, truncation=True, max_length=2048, return_tensors="pt"
-        )
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+    def batch_prediction(
+        self, texts: List[str]
+    ) -> Tuple[List[List[float]], List[List[float]]]:
+        """Process multiple texts in batches."""
+        all_probs = []
+        all_embs = []
 
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-            probs = F.sigmoid(outputs.logits)[0]
-            embedding = outputs.hidden_states[-1][0, 0, :]
+        for i in range(0, len(texts), 16):  # Batch size of 16
+            batch = texts[i : i + 16]
+            inputs = self.tokenizer(
+                batch,
+                padding=True,
+                truncation=True,
+                max_length=2048,
+                return_tensors="pt",
+            )
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-        return ([round(float(p), 3) for p in probs], [float(x) for x in embedding])
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                probs = F.sigmoid(outputs.logits)
+                embeddings = outputs.hidden_states[-1][:, 0, :]
 
-    def get_all_breakpoint_combinations(self, n_blocks: int) -> List[List[int]]:
-        """Generate all possible breakpoint combinations."""
-        all_breakpoints = []
-        for k in range(n_blocks):
-            for breakpoints in combinations(range(1, n_blocks), k):
-                all_breakpoints.append(list(breakpoints))
-        return all_breakpoints
+            all_probs.extend([[round(float(p), 3) for p in row] for row in probs])
+            all_embs.extend([[float(x) for x in row] for row in embeddings])
+
+        return all_probs, all_embs
+
+    def evaluate_segmentation(
+        self, blocks: List[str], breakpoints: List[int], cache: Dict[str, tuple]
+    ) -> Tuple[float, List[str], List[List[float]], List[List[float]]]:
+        """Evaluate a segmentation and return score, segments, probabilities, and embeddings."""
+        segments = []
+        uncached_segments = []
+        uncached_positions = []
+
+        # Generate all segments and identify which need prediction
+        start = 0
+        breakpoints = breakpoints + [len(blocks)]
+
+        for end in breakpoints:
+            segment = " ".join(blocks[start:end])
+            segments.append(segment)
+
+            if segment not in cache:
+                uncached_segments.append(segment)
+                uncached_positions.append(len(segments) - 1)
+
+            start = end
+
+        # Batch predict uncached segments
+        if uncached_segments:
+            batch_probs, batch_embs = self.batch_prediction(uncached_segments)
+            # Update cache with new predictions
+            for i, segment in enumerate(uncached_segments):
+                cache[segment] = (batch_probs[i], batch_embs[i])
+
+        # Collect all predictions (from cache)
+        probs_list = []
+        emb_list = []
+        total_score = 0
+
+        for segment in segments:
+            probs, emb = cache[segment]
+            probs_list.append(probs)
+            emb_list.append(emb)
+            total_score += max(probs)
+
+        # Calculate average score
+        total_score /= len(segments)
+
+        return total_score, segments, probs_list, emb_list
 
     def should_merge_segments(self, probs1: List[float], probs2: List[float]) -> bool:
         """Determine if segments should be merged based on multi-label predictions."""
@@ -147,52 +180,21 @@ class TextSegmenter:
         for i, (segment, probs) in enumerate(zip(segments, probs_list), 1):
             registers = self.get_active_registers(probs)
             print(f"\nSegment {i}: {registers}")
-            print(f"Text: {segment[:100]}...")  # Print first 100 chars
+            print(f"Text: {segment[:100]}...")
             print("---")
-
-    def evaluate_segmentation(
-        self, blocks: List[str], breakpoints: List[int], cache: Dict[str, tuple]
-    ) -> Tuple[float, List[str], List[List[float]], List[List[float]]]:
-        """Evaluate a segmentation and return score, segments, probabilities, and embeddings."""
-        segments = []
-        start = 0
-        probs_list = []
-        emb_list = []
-        total_score = 0
-
-        breakpoints = breakpoints + [len(blocks)]
-
-        for end in breakpoints:
-            segment = " ".join(blocks[start:end])
-
-            if segment in cache:
-                probs, emb = cache[segment]
-            else:
-                probs, emb = self.get_prediction(segment)
-                cache[segment] = (probs, emb)
-
-            segments.append(segment)
-            probs_list.append(probs)
-            emb_list.append(emb)
-            # Calculate geometric mean
-            all_max_probs = [max(probs_list[i]) for i in range(len(probs_list))]
-            total_score = np.exp(np.mean(np.log(all_max_probs)))
-
-            start = end
-
-        return total_score, segments, probs_list, emb_list
 
     def process_document(self, text: str) -> Dict:
         """Process a single document and find optimal segmentation."""
-        # First split into sentences
+        # First split into sentences and combine into blocks
         sentences = self.split_into_sentences(text)
-
-        # Combine into larger blocks
         blocks = self.combine_short_sentences(sentences)
         print(f"\nNumber of blocks after combining: {len(blocks)}")
 
         # Generate all possible breakpoint combinations
-        breakpoint_combinations = self.get_all_breakpoint_combinations(len(blocks))
+        breakpoint_combinations = []
+        for k in range(len(blocks)):
+            for breakpoints in combinations(range(1, len(blocks)), k):
+                breakpoint_combinations.append(list(breakpoints))
         print(f"Number of possible segmentations: {len(breakpoint_combinations)}")
 
         # Find best segmentation
@@ -225,10 +227,11 @@ class TextSegmenter:
 
             for i in range(1, len(best_segments)):
                 if self.should_merge_segments(current_probs, best_probs[i]):
-                    # Same register pattern, merge segments
+                    # Same register pattern, merge segments and get new predictions
                     current_segment += " " + best_segments[i]
-                    # Get new predictions for combined segment
-                    current_probs, current_emb = self.get_prediction(current_segment)
+                    current_probs, current_emb = self.batch_prediction(
+                        [current_segment]
+                    )[0]
                 else:
                     # Different register pattern, add current and start new
                     final_segments.append(current_segment)
@@ -266,25 +269,13 @@ def main():
     input_file = sys.argv[1]
     output_file = sys.argv[2]
 
-    try:
-        print("Starting segmenter initialization...")
-        # Initialize segmenter
-        segmenter = TextSegmenter(
-            model_path="/scratch/project_2011770/bge-2048",
-            prob_threshold=0.5,
-            initial_min_words=15,
-            max_groups=20,
-        )
-
-        # Quick test prediction
-        print("\nTesting model prediction...")
-        test_text = "This is a test sentence."
-        probs, emb = segmenter.get_prediction(test_text)
-        print("Test prediction successful!")
-        print(f"Number of register probabilities: {len(probs)}")
-    except Exception as e:
-        print(f"Error during initialization: {str(e)}")
-        raise
+    # Initialize segmenter
+    segmenter = TextSegmenter(
+        model_path="/scratch/project_2011770/bge-2048",
+        prob_threshold=0.5,
+        initial_min_chars=300,
+        max_groups=20,
+    )
 
     # Process file
     with open(input_file, "r") as fin, open(output_file, "w") as fout:

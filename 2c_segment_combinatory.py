@@ -229,9 +229,8 @@ class TextSegmenter:
                 if self.should_merge_segments(current_probs, best_probs[i]):
                     # Same register pattern, merge segments and get new predictions
                     current_segment += " " + best_segments[i]
-                    current_probs, current_emb = self.batch_prediction(
-                        [current_segment]
-                    )[0]
+                    batch_probs, batch_embs = self.batch_prediction([current_segment])
+                    current_probs, current_emb = batch_probs[0], batch_embs[0]
                 else:
                     # Different register pattern, add current and start new
                     final_segments.append(current_segment)
